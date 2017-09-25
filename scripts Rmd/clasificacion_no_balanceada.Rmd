@@ -1,0 +1,731 @@
+---
+title: "Evaluación MLII temas 1, 2, 6 y 7: Ejercicio 3"
+subtitle: "Clasificación no balanceada"
+author: "Inmaculada Perea Fernández"
+date: "mayo 2017"
+output: pdf_document
+---
+
+Completar el tratamiento de los datos de Insolvencia mediante técnicas apropiadas para Clasificación No Balanceada (datos en el material de dicho tema).
+
+
+# 1. Carga e instalación de librerías necesarias
+
+```{r message=FALSE, warning=FALSE}
+if (!require('caret')) install.packages('caret'); library('caret')
+if (!require('pROC')) install.packages('pROC'); library('pROC')
+if (!require('DMwR')) install.packages('DMwR'); library('DMwR')
+```
+
+# 2. Carga, inspección y preparación de los datos
+
+## 2.1 Carga de datos
+```{r}
+load("Insolvencia.RData")
+dim(datos)
+str(datos)
+summary(datos)
+```
+
+La variable dependiente es *failed_insolvent* (16) factor con dos niveles relativos a la insolvencia de empresas (*No* y *Yes*)
+
+## 2.2 Inspección del número de casos disponible para cada clase
+```{r}
+table(datos$failed_insolvent)
+prop.table(table(datos$failed_insolvent))
+barplot(table(datos$failed_insolvent), col = "blue")
+```
+
+Se observa que los datos están no balanceados, porque la clase *Yes* de la variable respuesta se presenta en el conjunto de entrenamiento en proporciones muy inferiores a la de la categoría *No*. En concreto un 95% son *No*, frente a un 0.05% que son *Yes*
+
+
+A continuación realizaremos transformaciones para que la primera clase corresponda a la clase minoritaria (*Yes*) y de este modo poder usar Sens en los ajustes, la sensitividad se referiará a ella. 
+```{r}
+datos$failed_insolvent = factor(as.character(datos$failed_insolvent),
+                                levels = rev(levels(datos$failed_insolvent)))
+table(datos$failed_insolvent)
+```
+
+
+## 2.3 División en entrenamiento, test y validación
+
+Se va a dividir el cojunto de datos en 3 partes:
+
+* Entrenamiento (60%)
+* Validación (15%)
+* Test (25%)
+
+El subconjunto de validación solo se utilizará para configurar el punto de corte (una de las estrategias para datos no balanceados), por eso y porque solo hay 2877 casos solo se va a reservar un 15% para el conjunto de validación.
+
+```{r}
+set.seed(271)
+n=nrow(datos)
+indices=1:n
+ient=sample(indices,floor(n*0.6))
+ival=sample(setdiff(indices,ient),floor(n*0.15))
+itest=setdiff(indices,union(ient,ival))
+
+training  = datos[ient,]
+validation  = datos[ival,]
+testing     = datos[itest,]
+training_valid=rbind(training, validation)
+
+dim(training)
+dim(validation)
+dim(testing)
+dim(training_valid)
+```
+
+## 2.4 Variables, funciones y configuración auxiliar
+
+Variable *Index* para usarlo con *trainControl*
+```{r}
+Index= 1:nrow(training)
+```
+
+Obtenemos los nombres de las variables predictoras en la variable *predictors*
+```{r}
+predictors = names(training)[names(training) != "failed_insolvent"]
+predictors
+```
+
+En los objetos *testResults* y *validResults* se van a guardar las predicciones del conjunto test y validación respectivamente
+```{r}
+testResults = data.frame(failed_insolvent = testing$failed_insolvent)
+validResults = data.frame(failed_insolvent = validation$failed_insolvent)
+```
+
+
+## 2.5 Funciones para medir el rendimiento 
+
+La función *fiveStats* devuelve las medidas de *twoClassSummary* y *defaultSummary* (Accuracy, Kappa, AUC ROC, Sensitivity y Specificity). La función *fourStats* devuelve todo lo aterior menos AUC
+
+```{r}
+fiveStats = function(...) 
+  c(twoClassSummary(...), defaultSummary(...))
+
+
+fourStats = function (data, lev = levels(data$obs),
+                      model = NULL)
+{
+  
+  accKapp = postResample(data[, "pred"], data[, "obs"])
+  out = c(accKapp,
+          sensitivity(data[, "pred"], data[, "obs"], lev[1]),
+          specificity(data[, "pred"], data[, "obs"], lev[2]))
+  names(out)[3:4] = c("Sens", "Spec")
+  out
+}
+```
+
+
+
+
+Opciones de control para el entrenamiento mediante el paquete *caret*. Se usará validación cruzada ya que el conjunto de validación es muy reducido.
+Notar que se utilizan 3 pliegues y no 10 porque el conjunto de validación es reducido y no es necesario 10 pliegues, de este modo conseguimos que tarde menos en calcular.
+```{r results='hide', message=FALSE, warning=FALSE}
+ctrlcv = trainControl(method = "cv",
+                      number=3,      # número de pliegues 
+                      classProbs = TRUE,
+                      summaryFunction = fiveStats,
+                      verboseIter=TRUE)
+```
+
+
+# 3. Ajuste de dos modelos: RF y regresión logística
+
+
+## 3.1 Random Forest
+
+
+Con *tuneLength* = total de valores de *mtry* a explorar. Como tarda algo de tiempo, tomamos *ntree* = 100 
+
+```{r results='hide', message=FALSE, warning=FALSE}
+rfFit = train(failed_insolvent ~ ., 
+              data = training,
+              method = "rf",
+              trControl = ctrlcv,
+              ntree = 100,
+              do.trace=TRUE,
+              tuneLength=3,
+              metric = "Sens", #Sensitividad
+              trace= FALSE) 
+```
+
+
+              
+
+```{r}
+rfFit
+rfFit$results #Cada medida, con su desv. tip.(NA EN ESTE CASO)
+```
+
+Probabilidades estimadas de la categoría *Yes*
+
+```{r}
+validResults$RF = predict(rfFit, validation, 
+                          type = "prob")[,1]
+testResults$RF = predict(rfFit, testing, 
+                         type = "prob")[,1]
+```
+
+Vamos a calcular las medidas de rendimiento en el conjunto test
+
+```{r}
+rfTestROC = roc(testResults$failed_insolvent, testResults$RF,
+                levels = rev(levels(testResults$failed_insolvent)))
+rfTestROC
+
+rfTestCM = confusionMatrix(predict(rfFit, testing), 
+                           testResults$failed_insolvent)
+rfTestCM
+```
+
+Obtenemos una especificidad alta (0.96), pero una sensitividad muy baja (0) por lo que el modelo no es bueno para clasificar la clase minoritaria *Yes*.
+
+```{r}
+plot(rfTestROC)
+```
+
+## 3.2 Modelo de regresión logística
+
+En este modelo no hay parámetros que configurar, aplicaremos directamente el modelo a los datos de entrenamiento
+
+
+```{r}
+ctrlrlog = trainControl(method = "none", 
+                        classProbs = TRUE,
+                        summaryFunction = fiveStats)
+
+
+lrFit = train(failed_insolvent ~ .,
+              data = training,
+              method = "glm",
+              trControl = ctrlrlog)
+lrFit
+summary(lrFit)
+
+```
+
+Probabilidades estimadas para la clase *Yes*
+
+```{r}
+validResults$LogReg = predict(lrFit, 
+                              validation, 
+                              type = "prob")[,1]
+
+testResults$LogReg = predict(lrFit, 
+                             testing, 
+                             type = "prob")[,1]
+
+lrTestROC = roc(testResults$failed_insolvent, testResults$LogReg,
+                levels = rev(levels(testResults$failed_insolvent)))
+lrTestROC
+plot(lrTestROC, main="Regresión Logística")
+
+lrTestCM = confusionMatrix(predict(lrFit, testing), 
+                           testResults$failed_insolvent)
+lrTestCM
+```
+
+Obtenemos de nuevo una sensitividad muy baja, el modelo no clasifica bien la clase *Yes*. Esto pone de manifiesto que los datos no están balanceados y los modelos aplicados directamente sobre ellos no dan buenos resultados. 
+
+
+
+## 3.3. Curvas COR y LIFT en el conjunto test
+
+```{r}
+labs = c(RF = "Random Forest", LogReg = "Reg.Log.")
+
+lift1 = lift(failed_insolvent ~ RF + LogReg , data = testResults,
+             labels = labs)
+str(lift1)
+prop.table(table(testResults$failed_insolvent))
+lift1$pct
+
+plotTheme = caretTheme()  #CONFIGURACION DE COLORES
+plot(rfTestROC, type = "S", col = plotTheme$superpose.line$col[1], 
+     legacy.axes = TRUE, xlab="1 - Especificidad",ylab="Sensitividad")
+plot(lrTestROC, type = "S", col = plotTheme$superpose.line$col[2],
+     add = TRUE, legacy.axes = TRUE)
+legend("bottomright",
+       c("Test RF", "Test Reg. Log."),
+       cex = .85,
+       col = plotTheme$superpose.line$col[1:2],
+       lwd = rep(2, 2),
+       lty = rep(1, 2))
+grid()
+
+xyplot(lift1,
+       ylab = "% Eventos Encontrados",
+       xlab =  "% Clientes",
+       lwd = 2,
+       type = "l", auto.key = list(columns = 2))
+```
+
+
+Los resultados obtenidos con ambos clasificadores para la clase minoritaria *Yes* no son buenos. La construcción directa de modelos de clasificación sobre datos no balanceado suele conllevar bajas tasas de acierto sobre las clases minoritorias, e incluso valores bajos para el coeficiente AUC en problemas de clasificación binaria.
+
+A continuación aplicaremos algunas de las principales estrategias para construir modelos más eficientes cuando los datos no están balanceados.
+
+* Puntos de corte alternativos:
+* Costes de Clasificación Incorrecta
+* Métodos de muestreo 
+* Método SMOTE
+
+
+# 4 Muestreo en la clase mayoritaria (*Downsampling*)
+
+## 4.1 Balanceo con la técnica *Downsamplig*
+
+Sean *n* y *N*, los totales de casos en las clases minoritarias y mayoritarias (suponemos clasificación binaria) en el conjunto de entrenamiento.
+
+Se genera un conjunto de datos balanceado de tamaño *2n* formado por:
+
+* Los *n* casos de la clase minoritaria.
+* Una selección aleatoria de *n* casos entre los *N* de la clase mayoritaria
+
+```{r}
+dim(training)
+
+downSampled = downSample(training[, -ncol(training)], 
+                         training$failed_insolvent)
+dim(downSampled)
+
+table(downSampled$Class) 
+
+downSampled_valid = downSample(validation[, -ncol(validation)], 
+                         validation$failed_insolvent)
+dim(downSampled_valid)
+table(downSampled_valid$Class) 
+
+downSampled_train_valid=rbind(downSampled, downSampled_valid )
+dim(downSampled_train_valid)
+
+```
+
+## 4.2 Modelo Random Forest con datos Downsampling
+A continuación se va a construir el modelo Random Forest sobre el conjunto resultante del resmuestreo downsampling
+
+
+```{r results='hide', message=FALSE, warning=FALSE}
+rfDown = train(Class ~ ., 
+              data = downSampled_train_valid,
+              method = "rf",
+              trControl = ctrlcv,
+              ntree = 100,
+              do.trace=TRUE,
+              tuneLength=3,
+              metric = "Sens")
+```
+
+
+```{r}
+rfDown
+rfDown$results
+```
+
+Probabilidades estimadas de la categoría *Yes*
+
+```{r}
+validResults$rfDown = predict(rfDown, validation, type = "prob")[,1]
+testResults$rfDown = predict(rfDown, testing, type = "prob")[,1]
+```
+
+Vamos a calcular las medidas de rendimiento en el conjunto test
+
+```{r}
+rfDownTestROC = roc(testResults$failed_insolvent, testResults$rfDown,
+                levels = rev(levels(testResults$failed_insolvent)))
+rfDownTestROC
+
+rfDownTestCM = confusionMatrix(predict(rfDown, testing), 
+                           testResults$failed_insolvent)
+rfDownTestCM
+```
+
+
+```{r}
+plot(rfDownTestROC)
+```
+
+
+## 4.3 Modelo Regresión logística con datos Downsampling
+A continuación se va a construir el modelo Regresión logística sobre el conjunto resultante del resmuestreo downsampling
+
+```{r}
+lrDown = train(Class ~ .,
+              data = downSampled_train_valid,
+              method = "glm",
+              trControl = ctrlrlog)
+lrDown
+summary(lrDown)
+
+```
+
+Probabilidades estimadas para la clase *Yes*
+
+```{r}
+validResults$lrDown = predict(lrDown, 
+                              validation, 
+                              type = "prob")[,1]
+
+testResults$lrDown = predict(lrDown, 
+                             testing, 
+                             type = "prob")[,1]
+
+lrDownTestROC = roc(testResults$failed_insolvent, testResults$lrDown,
+                levels = rev(levels(testResults$failed_insolvent)))
+lrDownTestROC
+plot(lrDownTestROC, main="Regresión Logística (Downsampling)")
+
+lrDownTestCM = confusionMatrix(predict(lrDown, testing), 
+                           testResults$failed_insolvent)
+lrDownTestCM
+```
+
+
+# 5 Remuestreo en la clase minoritaria (*Upsampling*)
+
+## 5.1 Balanceo con la técnica *Upsamplig*
+
+```{r}
+upSampled = upSample(training[, -ncol(training)], 
+                     training$failed_insolvent)
+dim(upSampled)
+table(upSampled$Class)
+
+upSampled_valid = upSample(validation[, -ncol(validation)], 
+                     validation$failed_insolvent)
+dim(upSampled_valid)
+table(upSampled_valid$Class) 
+
+upSampled_train_valid=rbind(upSampled, upSampled_valid )
+dim(upSampled_train_valid)
+```
+
+
+## 5.2 Modelo Random Forest con datos Upsampling
+A continuación se va a construir el modelo Random Forest sobre el conjunto resultante del resmuestreo upsampling
+
+```{r results='hide', message=FALSE, warning=FALSE}
+rfUp = train(Class ~ ., 
+              data = upSampled_train_valid,
+              method = "rf",
+              trControl = ctrlcv,
+              ntree = 100,
+              do.trace=TRUE,
+              tuneLength=3,
+              metric = "Sens")
+```
+
+
+```{r}
+rfUp
+rfUp$results
+```
+
+Probabilidades estimadas de la categoría *Yes*
+
+```{r}
+validResults$rfUp = predict(rfUp, validation, 
+                          type = "prob")[,1]
+testResults$rfUp = predict(rfUp, testing, 
+                         type = "prob")[,1]
+```
+
+Vamos a calcular las medidas de rendimiento en el conjunto test
+
+```{r}
+rfUpTestROC = roc(testResults$failed_insolvent, testResults$rfUp,
+                levels = rev(levels(testResults$failed_insolvent)))
+rfUpTestROC
+
+rfUpTestCM = confusionMatrix(predict(rfUp, testing), 
+                           testResults$failed_insolvent)
+rfUpTestCM
+```
+
+
+```{r}
+plot(rfUpTestROC)
+```
+
+
+## 5.3 Modelo Regresión logística con datos Upsampling
+A continuación se va a construir el modelo Regresión logística sobre el conjunto resultante del resmuestreo upsampling
+
+```{r}
+lrUp = train(Class ~ .,
+             data = upSampled_train_valid,
+             method = "glm",
+             trControl = ctrlrlog)
+lrUp
+summary(lrUp)
+
+```
+
+Probabilidades estimadas para la clase *Yes*
+
+```{r}
+validResults$lrUp = predict(lrUp, 
+                            validation, 
+                            type = "prob")[,1]
+
+testResults$lrUp = predict(lrUp, 
+                           testing, 
+                           type = "prob")[,1]
+
+lrUpTestROC = roc(testResults$failed_insolvent, testResults$lrUp,
+                levels = rev(levels(testResults$failed_insolvent)))
+lrUpTestROC
+plot(lrUpTestROC, main="Regresión Logística")
+
+lrUpTestCM = confusionMatrix(predict(lrUp, testing), 
+                           testResults$failed_insolvent)
+lrUpTestCM
+```
+
+
+# 6 Método *SMOTE* (Synthetic Minority Over-Sampling Technique)
+
+## 6.1 Balanceo con la técnica *SMOTE*
+
+```{r}
+smoted = SMOTE(failed_insolvent ~ ., data = training)
+dim(smoted)
+table(smoted$failed_insolvent)
+
+smoted_valid = SMOTE(failed_insolvent ~ ., data = validation)
+smoted_train_valid=rbind(smoted, smoted_valid)
+dim(smoted_train_valid)
+table(smoted_train_valid$failed_insolvent)
+```
+
+## 6.2 Random Forest con datos SMOTE
+A continuación se va a construir el modelo Random Forest sobre el conjunto resultante de aplicar la técnica SMOTE
+
+```{r results='hide', message=FALSE, warning=FALSE}
+rfSmote = train(failed_insolvent ~ ., 
+              data = smoted_train_valid,
+              method = "rf",
+              trControl = ctrlcv,
+              ntree = 100,
+              do.trace=TRUE,
+              tuneLength=3,
+              metric = "Sens")
+```
+
+
+```{r}
+rfSmote
+rfSmote$results
+```
+
+Probabilidades estimadas de la categoría *Yes*
+
+```{r}
+validResults$rfSmote = predict(rfSmote, validation, 
+                          type = "prob")[,1]
+
+testResults$rfSmote = predict(rfSmote, testing, 
+                         type = "prob")[,1]
+```
+
+Vamos a calcular las medidas de rendimiento en el conjunto test
+
+```{r}
+rfSmoteTestROC = roc(testResults$failed_insolvent, testResults$rfSmote,
+                levels = rev(levels(testResults$failed_insolvent)))
+rfSmoteTestROC
+
+rfSmoteTestCM = confusionMatrix(predict(rfSmote, testing), 
+                           testResults$failed_insolvent)
+rfSmoteTestCM
+```
+
+
+```{r}
+plot(rfSmoteTestROC)
+```
+
+
+## 6.3 Modelo Regresión logística con datos SMOTE
+
+A continuación se va a construir el modelo Regresión logística sobre el conjunto resultante de aplicar la técnica SMOTE
+
+```{r}
+lrSmote = train(failed_insolvent ~ .,
+                data = smoted_train_valid,
+                method = "glm",
+                trControl = ctrlrlog)
+lrSmote
+summary(lrSmote)
+
+```
+
+Probabilidades estimadas para la clase *Yes*
+
+```{r}
+validResults$lrSmote = predict(lrSmote, 
+                            validation, 
+                            type = "prob")[,1]
+
+testResults$lrSmote = predict(lrSmote, 
+                           testing, 
+                           type = "prob")[,1]
+
+lrSmoteTestROC = roc(testResults$failed_insolvent, 
+                     testResults$lrSmote,
+                     levels = rev(levels(testResults$failed_insolvent)))
+
+lrSmoteTestROC
+plot(lrSmoteTestROC, main="Regresión Logística")
+
+lrSmoteTestCM = confusionMatrix(predict(lrSmote, testing), 
+                                testResults$failed_insolvent)
+lrSmoteTestCM
+```
+
+
+
+
+# 7. Conclusiones
+
+## 7.1 Tabla comparativa
+
+Las siguiente función obtiene un resumen de los distintos modelos construidos.
+
+Parámetros:
+
+* x: Modelo
+* evl: conjunto de validación
+* tst: conjunto test
+
+La función determina el mejor umbral según:
+
+* best.method="closest.topleft" en validación
+* SALIDA: valROC, testROC, testSens, testSpec 
+
+
+```{r}
+samplingSummary = function(x, evl, tst)
+  {
+    lvl = rev(levels(tst$failed_insolvent))
+    evlROC = roc(evl$failed_insolvent,
+                  predict(x, evl, type = "prob")[,1],
+                  levels = lvl)
+    tstROC= roc(tst$failed_insolvent,
+                predict(x, tst, type = "prob")[,1],
+                levels = lvl)
+    rocs = c(auc(evlROC),auc(tstROC))
+    cut = coords(evlROC, x = "best", ret="threshold",
+                  best.method="closest.topleft")
+    # coords=punto de corte, el punto de corte lo calcula en el conjunto test
+    bestVals = coords(tstROC, cut, ret=c("sensitivity", "specificity"))
+    out = c(rocs, bestVals*100)
+    names(out) = c("valROC", "testROC", "testSens", "testSpec")
+    out
+  }
+```
+
+Esta fucncion además de evaluar los resultados introduce una nueva estrategia para construir modelos más eficientes para datos no balanceados. Esta estrategia se conoce como *Puntos de corte alternativo*. En clasificación binaria como el problema que nos ocupa (el conjunto de datos analizado clasifica entre 2 clases: *Yes*, *No*) se admite una expresión donde se compara la probabilidad estimada de pertenecer a la clase de interés con un umbral. Este umbral por defecto es 0.5, que es el valor con el que se ha calculado la sensitividad y especificidad en cada uno de los modelos de los apartados anteriores. La idea de esta estrategia es utilizar otros puntos de corte que conduzcan a mayores valores para la sensitividad.
+
+```{r}
+results = rbind(samplingSummary(rfFit, validation, testing),
+                samplingSummary(rfDown, validation, testing),
+                samplingSummary(rfUp, validation, testing),
+                samplingSummary(rfSmote, validation, testing),
+                samplingSummary(lrFit, validation, testing),
+                samplingSummary(lrDown, validation, testing),
+                samplingSummary(lrUp, validation, testing),
+                samplingSummary(lrSmote, validation, testing))
+                   
+rownames(results) = c("RF (Original)", "RF (Downsampling)", 
+                      "RF (Upsampling)", "RF (SMOTE)", "LR (Original)",
+                      "LR (Downsampling)", "LR (Upsampling)", "LR (SMOTE)")
+
+
+print(knitr::kable(round(results,4), format = "pandoc", align='c'))
+```
+
+A la vista de los resultados podemos concluir que el modelo con el que mejores resultados se obtienen es con el de Regresión Logística, y aplicando la técnica de puntos de corte alternativos para datos no balanceados.
+
+Observamos que realmente la técnica que ha mejorado los valores de sensitividad es la del punto de corte alternativo. El resto de estrategias aplicadas no mejoran de forma tan apreciable. No existe mucha diferencia con los resultados obtenidos de aplicar ese mismo a datos Smote, downSamplig o Upsampling.
+
+## 7.2 Representación gráfica
+
+A continuación se representarán gráficamente los resultados de todos los modelos calculados con las técnicas mencionadas.
+
+```{r}
+rocCols = c("black", rgb(1, 0, 0, .5), rgb(0, 0, 1, .5), rgb(0, 1, 0, .5))
+
+
+plot(roc(testResults$failed_insolvent, testResults$RF, 
+         levels = rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[1], legacy.axes = TRUE)
+
+plot(roc(testResults$failed_insolvent, testResults$rfDown, 
+         levels = rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[2],add = TRUE, legacy.axes = TRUE)
+
+plot(roc(testResults$failed_insolvent, testResults$rfUp, levels = 
+         rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[3], add = TRUE, legacy.axes = TRUE)
+
+plot(roc(testResults$failed_insolvent, testResults$rfSmote, levels = 
+         rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[4], add = TRUE, legacy.axes = TRUE)
+
+legend(.6, .4,
+       c("RF Original", "RF Down-Sampling", "RF Up-sampling", "RF Smote"),
+       lty = rep(1, 3),
+       lwd = rep(2, 3),
+       cex = .8,
+       col = rocCols)
+
+xyplot(lift(failed_insolvent ~ RF + rfDown + rfUp + rfSmote, data = testResults),
+       type = "l",
+       ylab = "% Eventos Encontrados",
+       xlab =  "% Clientes",
+       auto.key=list(columns = 3))
+
+
+```
+
+No existe muchas mejora al aplicar DownSampling, UpSampling o Smote al modelo Random Forest con puntos de corte alternativos.
+```{r}
+rocCols = c("black", rgb(1, 0, 0, .5), rgb(0, 0, 1, .5), rgb(0, 1, 0, .5))
+
+
+plot(roc(testResults$failed_insolvent, testResults$LogReg, 
+         levels = rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[1], legacy.axes = TRUE)
+
+plot(roc(testResults$failed_insolvent, testResults$lrDown, 
+         levels = rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[2],add = TRUE, legacy.axes = TRUE)
+
+plot(roc(testResults$failed_insolvent, testResults$lrUp, levels = 
+         rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[3], add = TRUE, legacy.axes = TRUE)
+
+plot(roc(testResults$failed_insolvent, testResults$lrSmote, levels = 
+         rev(levels(testResults$failed_insolvent))),
+         type = "S", col = rocCols[4], add = TRUE, legacy.axes = TRUE)
+
+legend(.6, .4,
+       c("LR Original", "LR Down-Sampling", "LR Up-sampling", "LR Smote"),
+       lty = rep(1, 3),
+       lwd = rep(2, 3),
+       cex = .8,
+       col = rocCols)
+
+xyplot(lift(failed_insolvent ~ LogReg + lrDown + lrUp + lrSmote, data = testResults),
+       type = "l",
+       ylab = "% Eventos Encontrados",
+       xlab =  "% Clientes",
+       auto.key=list(columns = 3))
+```
+
+Se observa que el modelo de Regresión Logística original, con la técnica de puntos de corte alternativo es el que más se aproxima a la forma de triángulo y el que está por encima del resto de su familia con el que estamos comparando.

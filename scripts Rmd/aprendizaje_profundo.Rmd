@@ -1,0 +1,278 @@
+---
+title: "Evaluación MLII (temas 1, 2, 6 y 7): Ejercicio 2"
+subtitle: "Aprendizaje profundo"
+author: "Inmaculada Perea Fernández"
+date: "mayo 2017"
+output: pdf_document
+---
+
+Trabajando ahora con todas las letras, es decir, con los 20000 casos del data frame *LetterRecognition*, construir y evaluar un perceptrón multicapas basado en aprendizaje profundo para predecir la variable *lettr*
+
+
+# 1 Librerías y servicio h2o
+
+## 1.1. Carga e instalación de librerías necesarias
+
+```{r message=FALSE, warning=FALSE}
+if (!require('mlbench')) install.packages('mlbench'); library('mlbench')
+if (!require('h2o')) install.packages('h2o'); library('h2o')
+```
+
+## 1.2. Inicialización del servicio h2o
+```{r results='hide'}
+localH2O = h2o.init(max_mem_size = '3g', 
+                    ip = "127.0.0.1",    # localhost
+                    port = 54321,
+                    nthreads = -1)       # Configura número de hilos según recursos disponibles
+```
+
+# 2. Carga, inspección y preparación de los datos
+
+## 2.1. Carga de los datos
+```{r}
+data(LetterRecognition)
+dim(LetterRecognition)
+head(LetterRecognition)
+str(LetterRecognition)
+table(LetterRecognition$lettr)
+```
+
+
+## 2.2. División entrenamiento y test
+
+Destinamos un 70% de los datos a entrenamiento y un 30% para test
+```{r}
+set.seed(271)
+n=nrow(LetterRecognition)
+train.index=sort(sample(1:n, ceiling(0.7*n)))
+train.data=LetterRecognition[train.index,]
+test.data=LetterRecognition[-train.index,]
+```
+
+### Conjunto de entrenamiento
+```{r}
+dim(train.data)
+summary(train.data)
+```
+
+### Conjunto de test
+```{r}
+dim(test.data)
+summary(test.data)
+```
+
+
+## 2.3. Conversión de los datos al formato h2o
+
+Con las siguientes instrucciones convertiremos los data frames en objetos que pueden ser procesados en el entorno paralelizado de cálculo con h2o.
+
+```{r results='hide'}
+train.hex <- as.h2o(train.data)
+test.hex<- as.h2o(test.data)
+```
+
+# 3. Búsqueda exhaustiva de hiper-parámetros
+
+Utilizaremos la librería *h2o* para construir un modelo basado en aprendizaje profundo pero antes realizaremos una búsqueda en el espacio de parámetros para encontrar los parámetros que ofrezcan mejor rendiemiento del modelo. 
+
+Utilizaremos la función *grid* de la librería *h2o* para explorar varias combinaciones de tamaños de la red y del parámetro de regularización L1. La función *grid* calcula además el error de clasificación de cada modelo mediante validación cruzada.
+
+## 3.1 Búsqueda cartesiana
+
+En la búsqueda cartesiana introducimos 3 posibles configuraciones de red y 2 posibles valores de parámetros de penalización L1. Son los que se muestran a continuación.
+
+Con la función *grid* se entrenará el producto cartesiano de ambos conjuntos de parámetros, es decir, 3x2=6 modelos en total.
+
+### Definición de hiper-parámetros
+```{r}
+# Tamaños de capa oculta
+hidden_search = list(c(100, 100),    # 2 capas, cada una de 100 nodos 
+                     c(50, 50, 50),  # 3 capas, cada una de 50 nodos
+                     c(200, 200))    # 2 capas, cada una de 200 nodos
+                                     
+# Parámetro de penalización L1
+l1_search = c(1e-4, 1e-3)
+
+
+hyper_params= list(hidden = hidden_search, 
+                   l1 = l1_search)
+```
+
+### Definición del criterio de búsqueda
+```{r}
+search_criteria = list(strategy = "Cartesian")
+```
+
+### Búsqueda cartesiana
+```{r results='hide'}
+search_h2o_grid.cartesian = h2o.grid("deeplearning",
+                           x = 2:17, 
+                           y = 1, 
+                           training_frame = train.hex,
+                           validation_frame = test.hex,
+                           distribution ="multinomial",
+                           activation = 'RectifierWithDropout',
+                           hyper_params = hyper_params,
+                           nfolds = 5,
+                           score_interval = 2,
+                           epochs = 50,
+                           stopping_rounds = 3,
+                           stopping_tolerance = 0.05,
+                           stopping_metric = "misclassification",
+                           search_criteria = search_criteria)
+```
+
+### Carga de resultados en fichero
+
+Este proceso lleva varios minutos. Para evitar repetir la búsqueda en futuras ejecuciones se va a cargar en el fichero *search_h2o_grid.cartesian.RData* el resultado de la búsqueda anterior, junto con el conjunto de test y entrenamiento. De este modo es posible cargar el resultado directemente sin tener que esperar a que finalice la búsqueda.
+
+```{r}
+save(train.data,
+     test.data,
+     search_h2o_grid.cartesian,
+     file="search_h2o_grid.cartesian.RData")
+```
+
+
+Con las siguiente instrucción se puede cargar el fichero *search_h2o_grid.cartesian.RData* que contiene los datos
+```{r}
+load(file="search_h2o_grid.cartesian.RData")
+search_h2o_grid.cartesian
+```
+
+
+### Evaluación de los modelos obtenidos mediante búsqueda cartesiana 
+```{r}
+nmodelos.cartesian=length(search_h2o_grid.cartesian@model_ids)
+Error.cartesian=numeric(nmodelos.cartesian)
+
+
+for (i in 1:nmodelos.cartesian)
+  {
+   model_id= search_h2o_grid.cartesian@model_ids[[i]]
+   entropia <- h2o.logloss(h2o.getModel(model_id), xval = TRUE)
+   Error.cartesian[i]=entropia
+   print(sprintf("Enropia VC (cartesian search): %f", entropia))
+}
+
+which.min(Error.cartesian)
+search.cartesian.model=search_h2o_grid.cartesian@model_ids[[which.min(which.min(Error.cartesian))]]
+```
+
+El mejor modelo obtenido con las búsqueda es el que está compuesto de 2 capas ocultas, cada una de 200 nodos y el valor *L1* es 1.0E-4. Este modelo es el que presenta menor valor de entropía (0.3129)
+
+## 3.2 Búsqueda aleatoria
+
+### Definición de hiper-parámetros
+```{r}
+# Tamaños de capa oculta
+hidden_search = lapply(1:100, function(x)10+sample(50,sample(4), replace=TRUE))
+                                     
+# Parámetro de penalización L1
+l1_search = seq(1e-6, 1e-3, 1e-6)
+
+
+hyper_params= list(hidden = hidden_search, 
+                   l1 = l1_search)
+```
+
+### Definición del criterio de búsqueda
+
+Indicamos que realice búsquedas con todas las combinaciones de los hiperparámetros que se dan como entrada en *hyper_params*. Indicamos el criterio de parada *max_model*, para que pare cuando evalúe 30 modelos.
+```{r}
+search_criteria = list(strategy = "RandomDiscrete",
+                       max_models = 30)
+```
+
+
+### Búsqueda aleatoria
+```{r results='hide'}
+search_h2o_grid.random = h2o.grid("deeplearning",
+                           x = 2:17, 
+                           y = 1, 
+                           training_frame = train.hex,
+                           validation_frame = test.hex,
+                           distribution ="multinomial",
+                           activation = 'RectifierWithDropout',
+                           hyper_params = hyper_params,
+                           nfolds = 5,
+                           score_interval = 2,
+                           epochs = 50,
+                           stopping_rounds = 3,
+                           stopping_tolerance = 0.05,
+                           stopping_metric = "misclassification",
+                           search_criteria = search_criteria)
+```
+
+### Carga de resultados en fichero
+Este proceso lleva varios minutos. Para evitar repetir la búsqueda en futuras ejecuciones se va a cargar en el fichero *search_h2o_grid.random.RData* el resultado de la búsqueda anterior, junto con el conjunto de test y entrenamiento. De este modo es posible cargar el resultado directemente sin tener que esperar a que finalice la búsqueda.
+
+```{r}
+save(train.data,
+     test.data,
+     search_h2o_grid.random,
+     file="search_h2o_grid.random.RData")
+```
+
+
+Con las siguiente instrucción se puede cargar el fichero *search_h2o_grid.random.RData* que contiene los datos
+```{r}
+load(file="search_h2o_grid.random.RData")
+search_h2o_grid.random
+```
+
+
+### Evaluación de los modelos obtenidos mediante búsqueda aleatoria
+```{r}
+nmodelos.random=length(search_h2o_grid.random@model_ids)
+Error.random=numeric(nmodelos.random)
+
+for (i in 1:nmodelos.random)
+  {
+   model_id= search_h2o_grid.random@model_ids[[i]]
+   entropia <- h2o.logloss(h2o.getModel(model_id), xval = TRUE)
+   Error.random[i]=entropia
+   print(sprintf("Enropia VC (random search): %f", entropia))
+}
+
+which.min(Error.random)
+search.random.model=search_h2o_grid.random@model_ids[[which.min(which.min(Error.random))]]
+```
+
+En esta búsqueda obtenemos que el mejor modelo encontrado de los 30 evaluados es el que se compone de una capa oculta de 48 nodos y con un L1=5.26E-4. Con este modelo se obtiene una entropía igual a 0.6742. El modelo obtenido, aunque es más simple que el encontrado con búsqueda cartesiana, pero tiene una entropia mucho mayor. Por tanto el mejor modelo es el obtenido por búsqueda cartesiana.
+
+# 4. Medida del rendimiento sobre el conjunto test
+
+Nos quedamos con el mejor modelo obtenido de las 2 estrategias de búsqueda realizadas en los apartados 3.1 y 3.2, es decir, el modelo compuesto por 2 capas ocultas cada una con 200 nodos.
+```{r}
+modelo=h2o.getModel(search.cartesian.model)
+modelo
+```
+
+## 4.1 Cálculo de las predicciones sobre conjunto test
+```{r results='hide'}
+predic_test <- h2o.predict(modelo, newdata = test.hex)
+pred <- as.data.frame(predic_test)
+```
+
+## 4.2 Tabla de confusión
+```{r}
+tabla=table(test.data[,1],pred[,1])
+tabla
+```
+
+## 4.3 Porcentaje de acierto total
+```{r}
+aciertos=100*diag(prop.table(tabla,1))
+acierto=100*sum(diag(tabla))/sum(tabla)
+round(acierto, 3)
+```
+
+Obtenemos un porcentaje de acierto bastante elevado, por lo que el modelo obtenido es bastante satisfactorio para el conjunto de datos evaludado.
+
+## 4.4 Porcentaje de acierto por categoría
+```{r}
+cbind(tabla, Acierto_test=round(aciertos, 3))
+```
+
+Todas las categorías tienen una tasa de acierto alta. La letra más difícil de reconocer es la letra *"H"*.

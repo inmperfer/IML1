@@ -1,0 +1,133 @@
+---
+title: "Evaluación MLII: Ejercicio 3"
+subtitle: "Selección de atributos"
+author: "Inmaculada Perea Fernández"
+date: "junio 2017"
+output: pdf_document
+---
+
+**Realice las siguientes acciones sobre la base de datos *spam* de la librería *kernlab*:**
+
+
+**Carga de librerías**
+```{r message=FALSE, warning=FALSE}
+if (!require('FSelector')) install.packages('FSelector'); library('FSelector')
+if (!require('kernlab')) install.packages('kernlab'); library('kernlab')
+if (!require('Biocomb')) install.packages('Biocomb'); library('Biocomb')
+if (!require('plyr')) install.packages('plyr'); library('plyr')
+```
+
+**Establecimiento de la semilla**
+```{r}
+set.seed(123456789)
+```
+
+**Carga, inspección y preparación de los datos**
+
+El conjunto de datos *spam* consta de 4601 observaciones y 58 variables:
+
+```{r}
+data(spam)
+dim(spam)
+summary(spam)
+str(spam)
+head(spam)
+```
+
+Tras la observación de los datos podemos concluir lo siguiente:
+
+* La variable objetivo es *type* y consta de 2 clases (*nonspam* y *spam*). 
+* Todas las variables regresoras son numéricas. 
+* Todos los datos están completos, no hay valores perdidos.
+* Los datos están ligeramente desbalanceados, porque existen más observaciones de la clase *nonspam*
+
+
+# Apartado 1 
+
+**Utilice los siguientes filtros univariantes de la librería *Fselector* para determinar los 10 atributos más relevantes en cada caso:**
+
+* **chi-squared**
+* **gain.ratio**
+* **oneR**
+* **random.forest.importance**
+* **relief**
+
+## 1.1 chi-squared
+```{r}
+pesos.chi = chi.squared(type~., spam)
+(sel.chi=cutoff.k(pesos.chi, 10))
+```
+
+## 1.2 gain.ratio
+```{r}
+pesos.gain = gain.ratio(type~., spam)
+(sel.gain=cutoff.k(pesos.gain, 10))
+```
+
+## 1.3 oneR
+```{r}
+pesos.one = oneR(type~., spam)
+(sel.one=cutoff.k(pesos.one, 10))
+```
+
+## 1.4 random.forest.importance
+```{r}
+pesos.RF = random.forest.importance(type~.,
+                                    spam,
+                                    importance.type=1) # decrecimiento medio en accuracy
+(sel.RF=cutoff.k(pesos.RF, 10))
+```
+
+## 1.5 relief
+```{r}
+pesos.relief = relief(type~.,
+                      spam,
+                      neighbours.count = 6,  # vecinos a analizar
+                      sample.size = 15)      # instancias a analizar
+
+(sel.relief=cutoff.k(pesos.relief, 10))
+```
+
+Los filtros *chi cuadrado* y los *basados en entropía* determinan la importacia de atributos **discretos**, por tanto no es recomendable usarlo sobre el conjunto *spam*, ya que los atributos son en su mayoría continuos.
+
+# Apartado 2
+
+**Aplique el filtro multivariante *CFS***
+```{r}
+(sel.cfs = cfs(type~., spam))
+```
+
+# Apartado 3
+
+**Aplique el filtro multivariante *FCBF*, utilizando un valor umbral 0.02 para la correlación del atributo con la variable de clase.**
+
+Para utilizar la función *select.fast.filter* se debe cumplir lo siguiente:
+
+* La  ultima columna del dataframe de entrada debe ser la variable de clase (factor)
+* El número máximo de clases 10
+
+El conjunto de datos *spam* tiene la variable *type* en la ultima posición y es de tipo factor con 2 clases (spam/nonspam), por tanto no es necesario realizar ningún tipo de transformación.
+```{r}
+(pesos.fcbf=select.fast.filter(spam,    
+                               disc.method="MDL",   # Algoritmo discretización
+                               threshold=0.02,      # Valor umbral
+                               attrs.nominal=58))   # El único atributo nominal es type
+
+sel.fcbf=pesos.fcbf$Biomarker
+```
+
+# Apartado 4
+
+**Indique cuáles son los 5 atributos más frecuentemente seleccionados por los procedimientos aplicados.**
+
+Obtenemos la frecuencia con la que ha sido seleccionado cada atributo por los procedimientos aplicados
+```{r}
+selected_features= c(sel.chi, sel.gain, sel.one, sel.RF, sel.relief, sel.cfs, as.character(sel.fcbf))
+df = count(selected_features)
+(best.sel = df[order(df[["freq"]], decreasing = TRUE),] )
+```
+
+Seleccionamos los 5 atributos más frecuentes
+```{r}
+head(best.sel, 5)
+```

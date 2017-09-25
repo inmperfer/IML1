@@ -1,0 +1,202 @@
+---
+title: "Evaluación MLI: Ejercicio 3 (Árboles de clasificación)"
+author: "Inmaculada Perea Fernández"
+date: "Abril 2017"
+output: pdf_document
+---
+
+
+Completar la construcción de un árbol de clasificación correspondiente al fichero de instrucciones "EjemploLABrpart_default.r", dentro del material correspondiente a Árboles de Clasificación y Regresión
+
+**Carga de librerías necesarias**
+
+```{r message=FALSE, warning=FALSE}
+if (!require('rpart')) install.packages('rpart'); library('rpart')
+if (!require('rpart.plot')) install.packages('rpart.plot'); library('rpart.plot')
+if (!require('ROCR')) install.packages('ROCR'); library('ROCR')
+if (!require('partykit')) install.packages('partykit'); library('partykit')
+```
+
+
+# 1 Obtención e inspección del conjunto de datos
+
+## 1.1 Carga de los datos
+El conjunto de datos *Default* consta de 673 observaciones y 4 variables:
+
+* *default*: (No/Yes) el cliente presenta números rojos en la tarjeta de crédito
+* *student*: (No/Yes)
+* *balance*: saldo medio tras el pago mensual
+* *income*: ingresos
+
+```{r}
+data=read.table(file="Default.txt",header=TRUE)
+dim(data)
+str(data)
+head(data)
+summary(data)
+```
+## 1.2 Estudio de valores perdidos
+```{r}
+sum(is.na(data))
+```
+No existen valores perdidos
+
+## 1.3 División en entrenamiento y test
+```{r}
+set.seed(123456789)
+n=nrow(data)
+
+index_train=sample(1:n, floor(0.7*n))
+
+default_train=data[index_train,]
+default_test=data[-index_train,]
+
+dim(default_train)
+dim(default_test)
+```
+
+# 2 Construcción del modelo
+
+## 2.1 Matriz de costes
+
+El banco prefiere evitar tarjetas "deudoras". Se va a considerar una matriz de costes. El coste de clasificar *NO* como *YES* es 5 veces superior a clasificar YES como NO
+
+```{r}
+L=matrix(c(0,1,5,0),2,2)
+rownames(L)=colnames(L)=levels(data$default)
+L
+```
+
+## 2.2 Construcción del árbol
+Construir un árbol de clasificación considerando los costes definidos en la matriz *L* y aplicando el procedimiento de recorte *1-ES*. 
+
+```{r}
+default.rpart<- rpart(default~ ., 
+                      data=default_train,  
+                      method = "class",
+                      cp=0.001,
+                      parms=list(loss=L))
+default.rpart
+```
+
+**Tabla con las estimaciones VC**
+```{r}
+cptabla<- default.rpart$cptable
+cptabla
+plotcp(default.rpart, lty=2, upper="splits", col="blue")
+```
+
+**Representación gráfica**
+```{r}
+rpart.plot(default.rpart, main="CART sobre Default")
+```
+
+## 2.3 Recorte regla 1-ES
+
+**Cálculo del punto de corte con la regla 1-ES**
+```{r}
+CP1ES<- min(cptabla[,4])+cptabla[which.min(cptabla[,4]),5]
+cat("CP 1-ES= ", round(CP1ES, 3),"\n")
+
+cprecorte<- cptabla[cptabla[,4]<CP1ES,][1,1]
+cat("CP Recorte= ", round(cprecorte, 3),"\n")
+```
+
+**Recorte**
+
+Aplicamos la función *prune.rpart* para hacer la poda del arbol construido en el punto de corte calculado con anterioridad
+```{r}
+default.rpart.1es<-prune.rpart(default.rpart, cp=cprecorte)  
+default.rpart.1es
+```
+
+**Representación gráfica**
+```{r}
+default.1es.asparty <- as.party(default.rpart.1es)
+plot(default.1es.asparty)
+rpart.plot(default.rpart.1es, main="CART sobre Default (árbol recortado)")
+```
+
+# 3 Medida de ajuste
+
+## 3.1 Evaluar el modelo (acierto, sensitividad, especificidad)
+
+Comparemos ambos árboles
+
+**Árbol sin recortar**
+```{r}
+ct<-table(default_test$default,
+          predict(default.rpart, default_test, type="class"),
+          dnn=c("C. REAL", "C. PRONOSTICADA"))
+ct
+
+# Porcentaje correcto por grupos
+100*diag(prop.table(ct, 1))
+
+acierto=100*sum(diag(prop.table(ct)))
+sens=ct[2,2]/(ct[2,2] + ct[2,1])
+spec=ct[1,1]/(ct[1,1] + ct[1,2])
+```
+
+**Árbol recortado**
+```{r}
+ct.1es<-table(default_test$default,
+              predict(default.rpart.1es, default_test, type="class"),
+              dnn=c("C. REAL", "C. PRONOSTICADA"))
+ct.1es
+
+# Porcentaje correcto por grupos
+100*diag(prop.table(ct.1es, 1))
+
+acierto.1es=100*sum(diag(prop.table(ct.1es)))
+sens.1es=ct.1es[2,2]/(ct.1es[2,2] + ct.1es[2,1])
+spec.1es=ct.1es[1,1]/(ct.1es[1,1] + ct.1es[1,2])
+```
+
+A continuación construiremos una tabla comparativas para el ambos árboles (con y sin recorte)
+
+```{r results='asis'}
+arb=c(acierto, sens, spec)
+arb.1es=c(acierto.1es, sens.1es, spec.1es)
+
+
+tabla_resumen = data.frame (round(rbind(arb, arb.1es), 3), 
+                            row.names=c("Árbol sin recorte", 
+                                        "Árbol con recorte 1-ES"))
+
+print(knitr::kable(tabla_resumen, format = "pandoc",
+                   col.names = c("Acierto", "Sensitividad", "Especificidad"), 
+                   align='c'))
+```
+
+Ambos árboles presentan un acierto, especificidad y sensitividad alta. No existe apenas diferencia en el acierto total y sin embargo el arbol recortado es más sencillo e interpretable. Además, en el árbol recortado se consigue disminuir los errores de clasificar *NO* como *YES*, que es una de las preocupaciones del banco que ha encargado el estudio.
+
+Por tanto, nos quedamos con el árbol recortado que es bastante satisfactorio para los datos.
+
+A contincuación el resto de cálculos los realizaremos sobre el árbol recortado.
+
+## 3.2 Área bajo la curva operativa característica
+
+```{r}
+probabi<- predict(default.rpart.1es, default_test, type="prob")[,2]
+prediobj<-prediction(probabi, default_test$default)
+plot(performance(prediobj, "tpr","fpr"), main="CURVA COR TEST")
+abline(a=0, b=1, col="blue", lty=2)
+auc<- as.numeric(performance(prediobj,"auc")@y.values)
+cat("AUC test= ",auc ,"\n")
+```
+
+El *AUC* tambien es alto, como cabía esperar después del acierto total obtenido.
+
+## 3.3 Indicador EMC (Expected Misclassification Cost)
+
+*p[NO]p[YES/NO]coste[YES/NO]+p[YES]p[NO/YES]coste[NO/YES]*
+```{r}
+pNo=(ct.1es[1,1]+ct.1es[1,2])/sum(ct.1es)
+PYes_No=ct.1es[1,2]/sum(ct.1es)
+PYes=(ct.1es[2,1]+ct.1es[2,2])/sum(ct.1es)
+PNo_Yes=ct.1es[2,1]/sum(ct.1es)
+EMC=pNo * PYes_No * L[1,2] + PYes * PNo_Yes* L[2,1]
+cat("EMC= ", round(EMC, 3), "\n")
+```
+

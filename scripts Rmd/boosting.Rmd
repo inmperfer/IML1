@@ -1,0 +1,274 @@
+---
+title: "Evaluación MLII: Ejercicio 1"
+subtitle: "Boosting, Aprendizaje Supervisado Secuencial, Selección de Atributos"
+author: "Inmaculada Perea Fernández"
+date: "junio 2017"
+output: pdf_document
+---
+
+
+**Carga de librerías**
+```{r message=FALSE, warning=FALSE}
+if (!require('kernlab')) install.packages('kernlab'); library('kernlab')
+if (!require('adabag')) install.packages('adabag'); library('adabag')
+if (!require('caret')) install.packages('caret'); library('caret')
+```
+
+**Establecimiento de la semilla**
+```{r}
+set.seed(123456789)
+```
+
+**Carga, inspección y preparación de los datos**
+
+El conjunto de datos *spam* consta de 4601 observaciones y 58 variables:
+
+```{r}
+data(spam)
+dim(spam)
+summary(spam)
+str(spam)
+head(spam)
+```
+
+```{r}
+table(is.na(spam))
+```
+
+```{r}
+table(spam$type)
+```
+
+Tras la observación de los datos podemos concluir lo siguiente:
+
+* La variable objetivo es *type* y consta de 2 clases (*nonspam* y *spam*). 
+* Todas las variables regresoras son numéricas. 
+* Todos los datos están completos, no hay valores perdidos.
+* Los datos están ligeramente desbalanceados, porque existen más observaciones de la clase *nonspam*
+
+
+# 1 División en conjunto entrenamiento y validación
+
+A partir de la base de datos spam de la librería *kernlab*, construya una muestra de aprendizaje aleatoria formado por el 70% de las instancias, y una muestra de validación formada por el 30% restante.
+```{r}
+n=nrow(spam)
+train.index=sort(sample(1:n, ceiling(0.7*n)))
+train=spam[train.index,]
+test=spam[-train.index,]
+```
+
+## 1.1 Conjunto de entrenamiento
+```{r}
+dim(train)
+table(train$type)
+```
+
+## 1.2 Conjunto de test
+```{r}
+dim(test)
+table(test$type)
+```
+
+# 2 Construcción del modelo
+
+Construya un modelo boosting a partir de la muestra de aprendizaje generada para pronosticar la variable *type* a partir de las restantes variables (utilice la librería *adabag*)
+
+```{r}
+modelo = boosting(type~., 
+                  data=train, 
+                  mfinal=200, 
+                  control = rpart.control(maxdepth=1))
+```
+
+
+# 3 Predicciones sobre conjunto test
+
+Realice predicciones para la muestra de validación y obtenga la matriz de confusión y el porcentaje de observaciones mal clasificadas. Obtenga el margen de las observaciones de la muestra de validación y determine los índices correspondientes a las que han sido mal clasificadas
+
+## 3.1 Predicciones en el conjunto test
+```{r}
+pred = predict.boosting(modelo, newdata=test)
+```
+
+## 3.2 Matriz de confusión
+```{r}
+pred$confusion
+```
+
+## 3.3 Porcentaje de clasificación incorrecta
+```{r}
+model.misclass=round(100*pred$error, 3)
+cat("Tasa de clasificación incorrecta:", model.misclass, "%")
+```
+
+## 3.4 Margen de las observaciones test
+```{r}
+margin.test=margins(pred, test)
+```
+
+## 3.5 Indices de observaciones mal clasificadas
+Las observaciones mal clasificadas son aquellas que presentan un margen negativo.
+
+```{r}
+(misclassified.index=which(margin.test$margins < 0))
+table(pred$class[misclassified.index])
+```
+
+Las muestras correctamente clasificadas son las que presentan un margen positivo, considerándose mejor clasificadas aquellas cuyo margen está próximo a 1. Veamos a continuación la distribución de los valores de margen para las observaciones correctamente clasificadas:
+```{r}
+hist(margin.test$margins[-misclassified.index], 
+     col="blue", freq=T, 
+     main="Margen de las observaciones test correctamente clasificadas", 
+     xlab="margen", ylab="Frecuencia absoluta")
+```
+
+El valor del margen para muestras del conjunto test correctamente clasificadas se encuentra en el intervalo: 
+```{r}
+cat("[",  round(min(margin.test$margins[-misclassified.index]), 3), "-",
+    round(max(margin.test$margins[-misclassified.index]), 3), "]" )
+``` 
+
+Observamos que gran parte de los valores de márgenes para las observaciones correctamente clasificadas del conjunto test están bastante alejados de 1 .
+
+## 3.6 Curva acumulativa del margen
+```{r}
+margin.train = margins(modelo, train)
+plot.margins(margin.test, margin.train, main="Curva acumulativa del margen")
+```
+El clasificador necesita un porcentaje alto de observaciones para obtener un margen próximo a 1. Observamos que el comportamiento del conjunto test y entrenamiento son muy similares, ambas curvas están muy próximas, ligeramente por encima la del conjunto test como cabría esperar.
+
+
+## 3.7 Representación gráfica de la evolución del error
+Vamos a representar la evolución del error para comprobar si existe sobreajuste
+
+```{r}
+error.train = errorevol(modelo,train)
+error.test = errorevol(modelo,test)
+plot.errorevol(error.train,error.test)
+```
+
+Observamos que en torno a 100 iteraciones el error fluctua y sube ligeramente para luego bajar. Habría que comparar si el modelo con 100 iteraciones presenta mejor o igual rendimiento en el conjunto test, porque a la vista de la gráfica se observa ligero sobreajuste al usar 200 iteraciones.
+
+# 4 Validación cruzada
+Utilizando validación cruzada con 10 pliegues, obtenga la matriz de confusión y el porcentaje de observaciones mal clasificadas.
+
+## 4.1 Modelo entrenado con validación cruzada 
+```{r}
+modelo.cv = boosting.cv(type~.,
+                        data=spam,   # uso todo el conjunto de datos
+                        v=10,        # 10 pliegues
+                        mfinal=20,   # 20 iteraciones
+                        control = rpart.control(maxdepth=1))
+```
+
+## 4.2 Tabla de confusión
+```{r}
+modelo.cv$confusion
+```
+
+## 4.3 Porcentaje de observaciones mal clasificadas
+```{r}
+modelo.cv.misclass= round(100*modelo.cv$error, 3)
+cat("Tasa observaciones mal clasificadas:", modelo.cv.misclass, "%")
+```
+
+
+# 5 Cálculo de parámetros óptimos
+
+Utilizando la función *train* de la librería *caret*, determine los parámetros óptimos dentro del siguiente conjunto:
+
+* mfinal: {5, 6, 7, 8, 9, 10}
+* maxdepth: {1, 2}
+* coeflearn: {Breiman, Zhu}
+
+Como técnica de validación, utilizar validación cruzada con 3 pliegues
+
+## 5.1 Definición del método de validación
+```{r}
+boost_valid = trainControl(method='cv',  # validación cruzada
+                           number=3,     # número de pliegues
+                           repeats=1)    # repeticiones del proceso validación
+```
+
+## 5.2 Rejilla para ajuste de parámetros
+```{r} 
+
+(boost_grid = expand.grid(mfinal=c(5, 6, 7, 8, 9, 10),
+                          maxdepth=c(1, 24),
+                          coeflearn=c("Breiman","Zhu")))
+```
+
+## 5.3 Entrenamiento y validación del modelo 
+
+A partir de la muestra de entrenamiento obtengo los mejores párametros y el modelo construido con estos
+```{r message=FALSE, warning=FALSE} 
+modelo.params = train(type ~ .,
+                      data=train,  
+                      method='AdaBoost.M1',
+                      trControl=boost_valid,
+                      tuneGrid=boost_grid)
+
+```
+
+## 5.4 Medidas de rendimiento para los distintos parámetros
+```{r} 
+modelo.params$results
+```
+
+## 5.5 Parámetros seleccionados
+```{r}
+(best.params=modelo.params$bestTune)
+```
+
+## 5.6 Representación gráfica del ajuste de parámetros
+```{r}
+plot(modelo.params)
+```
+
+## 5.7 Obtención del mejor modelo (con los parámetros óptimos)
+Obtengo el modelo con los parámetros óptimos usando la función *boosting* porque si uso *modelo.params$finalModel* la función *predict.boosting* no funciona correctamente, aunque el objeto sea de la clase boosting
+```{r}
+modelo.bestParams = boosting(type~., 
+                             data=train, 
+                             mfinal=best.params$mfinal, 
+                             control=rpart.control(maxdepth=best.params$maxdepth),
+                             coeflearn=best.params$coeflearn)
+```
+
+## 5.8 Cálculo de las predicciones sobre el conjunto test
+```{r}
+pred.bestParams = predict.boosting(modelo.bestParams, newdata=test)
+```
+
+## 5.9 Matriz de confusión
+```{r}
+pred.bestParams$confusion
+```
+
+## 5.10 Porcentaje de clasificación incorrecta
+```{r}
+model.bestParams.misclass=round(100*pred.bestParams$error, 3)
+cat("Tasa de clasificación incorrecta:", model.bestParams.misclass, "%")
+```
+
+
+# 6 Comparativa
+A continuación compararemos los resultados obtenidos con cada uno de los modelos construidos.
+
+```{r results='asis'}
+table_model1=c(model.misclass)
+table_model2=c(modelo.cv.misclass)
+table_model3=c(model.bestParams.misclass)
+
+
+tabla_resumen = data.frame (rbind(table_model1, table_model2, table_model3), 
+                            row.names=c("modelo 1 (Breiman, mfinal=200)", 
+                                        "modelo validación cruzada (Breiman, mfinal=20, 10 pliegues)",
+                                        "modelo parámetros óptimos"))
+
+print(knitr::kable(round(tabla_resumen, 3), format = "pandoc",
+                   col.names = c("Tasa clasificación incorrecta"), 
+                   align='c'))
+```
+
+El mejor modelo es el modelo con parámetros ajustados, el construido en el apartado 5, ya que presenta la tasa de clasificación incorrecta más baja.

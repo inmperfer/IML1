@@ -1,0 +1,187 @@
+---
+title: "Evaluación ML I"
+subtitle: "Ejercicio 1 (Análisis Discriminante, Naïve Bayes)"
+author: "Inmaculada Perea Fernández"
+date: "junio 2017"
+output: pdf_document
+---
+
+Sobre la base de datos *BreastCancer* de la librería *mlbench*, realice las siguientes actividades:
+
+* Construya un clasificador *Naive-Bayes* usando una muestra aleatoria constituida por 2/3 de la totalidad del fichero de datos.
+
+* Obtenga la matriz de confusión y el porcentaje de clasificación incorrecta a partir de las instancias no usadas en la construcción del clasificador.
+
+* Determine el número de predicciones correspondientes a la clase *malignant*
+
+* De las predicciones consideradas en el apartado anterior, determine cuántas de ellas se han obtenido con una probabilidad mayor que 0.75
+
+
+**Carga de las librerías necesarias**
+
+```{r message=FALSE, warning=FALSE}
+if (!require('mlbench')) install.packages('mlbench'); library('mlbench')
+if (!require('e1071')) install.packages('e1071'); library('e1071')
+```
+
+# 1 Carga, inspección y preparación de los datos
+
+
+## 1.1. Carga e inspección de los datos
+
+El conjunto de datos *BreastCancer* consta de 699 observaciones y 11 variables:
+
+* [,1]	 **Id**:	 Sample code number
+* [,2]	 **Cl.thickness**:	 Clump Thickness
+* [,3]	 **Cell.size**:	 Uniformity of Cell Size
+* [,4]	 **Cell.shape**:	 Uniformity of Cell Shape
+* [,5]	 **Marg.adhesion**:	 Marginal Adhesion
+* [,6]	 **Epith.c.size**:	 Single Epithelial Cell Size
+* [,7]	 **Bare.nuclei**:	 Bare Nuclei
+* [,8]	 **Bl.cromatin**:	 Bland Chromatin
+* [,9]	 **Normal.nucleoli**:	 Normal Nucleoli
+* [,10]	 **Mitoses**:	 Mitoses
+* [,11]	 **Class**:	 Class
+
+```{r}
+# carga de los datos
+data(BreastCancer)
+# Dimensión de los datos
+dim(BreastCancer)
+str(BreastCancer)
+head(BreastCancer)
+summary(BreastCancer)
+```
+
+En la inspección de los datos realizadas en este apartado observamos que existe una variable que no aporta información al estudio (*Id*), y que existen 16 valores perdidos pertenecientes a la variable *Bare.nuclei*. 
+
+
+
+## 1.2 Preparación de los datos
+A continuación realizaremos las transformaciones necesarias a los datos antes de usarlos en la construcción del modelo.
+
+### 1.2.1 Eliminación de la variable *Id*
+
+Eliminamos la variable *Id* del estudio, ya que se trata de un identificador tipo caracter de la muestra, y no aporta información relevante para la clasificación.
+```{r}
+datos<-subset(BreastCancer, select=-Id)
+```
+
+### 1.2.2 Estudio y eliminación de los valores perdidos
+```{r}
+table(is.na(datos))
+```
+
+A continuación eliminaremos los valores perdidos del estudio, porque aunque sea posible indicar que no se tengan en cuenta en la construcción del modelo con la función *naviveBayes* y la opción *na.action=na.omit*, no queremos que formen parte tampoco del conjunto test que construiremos a continuación.
+
+```{r}
+datos<-na.omit(datos)
+dim(datos)
+```
+
+Si volvemos a consultar la existencia de valores perdidos observamos que se han eliminado correctamente, y que nuestro dataset ahora sólo contiene valores completos.
+```{r}
+table(is.na(datos))
+```
+
+### 1.2.3. División entrenamiento y test
+A continuación dividiremos el conjunto de datos en entrenamiento y test. Destinaremos 2/3 de los datos a entrenamiento y 1/3 a test 
+```{r}
+set.seed(123456789)
+n=nrow(datos)
+train.index=sort(sample(1:n, ceiling((2/3)*n)))
+train=datos[train.index,]
+test=datos[-train.index,]
+```
+
+#### Conjunto de entrenamiento
+```{r}
+dim(train)
+summary(train)
+str(train)
+table(train$Class)
+```
+
+#### Conjunto de test
+```{r}
+dim(test)
+summary(test)
+str(test)
+table(test$Class)
+```
+
+En ambos conjuntos estan presentes las dos clases existentes *benign* y *malignant*, por lo que no será necesario realizar suavizado de Laplace ni tampoco seleccionar el conjunto test y aprendizaje con técnicas de estratificación de la librería *caret*.
+
+# 2. Contrucción del clasificador *Naive-Bayes*
+
+A continuación construiremos el modelo 
+```{r}
+clasificador=naiveBayes(x=subset(train, select=-Class), # variables predictoras
+                        y=train$Class,                  # variable objetivo (clases)
+                        laplace=0,
+                        na.action=na.omit)
+
+```
+
+## 2.1 Proporción de muestras en cada clase estimadas a partir de la muestra
+```{r}
+clasificador$apriori
+```
+## 2.3 Probabilidades de cada variable condicionadas a la clase
+```{r}
+clasificador$tables
+```
+
+
+# 3. Evaluación del rendimiento
+
+A continuación evaluaremos la bondad del ajuste del modelo *Naïve Bayes* a los datos.
+
+## 3.1 Cálculo de predicciones sobre el conjunto test
+
+Indicamos *type="clase"* porque en este caso nos interesa conocer la predicción de pertenencia o no a cada clase.
+```{r}
+prediccion.class = predict(object=clasificador,
+                            newdata=test,
+                            type="class")
+```
+
+## 3.2 Matriz de confusión 
+```{r}
+(matconf = table(prediccion.class,
+                 test$Class,
+                 dnn=c("clase pronosticada","clase real")))
+```
+
+## 3.3 Porcentaje de clasificación incorrecta
+```{r}
+round(100*(1-(sum(diag(matconf))/nrow(test))), 3)
+```
+El porcentaje de clasificación incorrecta es bajo, con lo que podemos concluir que el modelo obtenido se ajusta bien a los datos.
+
+
+## 3.4 Número de predicciones correspondientes a la clase *malignant*
+
+A contiuación el número de predicciones clasificadas como *malignant*
+```{r}
+length(which(prediccion.class=="malignant"))
+```
+
+A continuación el porcentaje de predicciones del total calculado que corresponden a la clase *malignant*
+```{r}
+round(100*length((which(prediccion.class=="malignant"))) / length(prediccion.class), 3)
+```
+
+## 3.5 Predicciones correspondientes a la clase *malignant* con probabilidad mayor que *0.75*
+
+Indicamos la opción *type="raw"* en el cálculo de las predicciones en el conjunto test para obtener el valor de la probabilidad de pertenencia a cada clase.
+
+```{r}
+prediccion.raw = predict(object=clasificador,
+                         newdata=test,
+                         type="raw")
+
+length(which(prediccion.raw[,2] > 0.75))
+```
+
+Sólamente una de las 78 predicciones obtenidas de pertenencia a la clase *malignant* tiene una probabilidad inferior a 0.75. Las otras 77 tienen una probabilidad de pertenecer a *malignant* superior a 0.75.

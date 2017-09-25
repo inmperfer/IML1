@@ -1,0 +1,724 @@
+---
+title: "Evaluación MLI: Ejercicio 2"
+subtitle: "(Reducción de la dimensionalidad)"
+author: "Inmaculada Perea Fernández"
+date: "Abril 2017"
+output: pdf_document
+---
+
+Acceder a los datos gironde la librería *PCAmixdata*. En los siguientes apartados seleccionar los registros completos si hay valores perdidos.
+
+
+**Carga e instalación de librerías necesarias**
+
+```{r message=FALSE, warning=FALSE}
+
+if (!require('cluster')) install.packages('cluster'); library('cluster')
+if (!require('PCAmixdata')) install.packages('PCAmixdata'); library('PCAmixdata')
+if (!require('corrplot')) install.packages('corrplot'); library('corrplot')
+
+# Necesarias para la normalización
+if (!require('Rcpp')) install.packages('Rcpp'); library('Rcpp')
+if (!require('clusterSim')) install.packages('clusterSim'); library('clusterSim')
+if (!require('digest')) install.packages('digest'); library('digest')
+
+
+if (!require('GA')) install.packages('GA'); library('GA')
+if (!require('leaps')) install.packages('leaps'); library('leaps')
+```
+
+
+
+# Ejercicio 2.1
+
+Realizar e interpretar un análisis de componentes principales (matriz de correlaciones) para *gironde$employment*.
+
+
+## 2.1.1 Carga, inspección y preparación de los datos
+
+**Carga de los datos**
+```{r}
+data(gironde)
+employment.na<-gironde$employment
+head(employment.na)
+str(employment.na)
+summary(employment.na)
+dim(employment.na)
+```
+
+**Eliminación de los valores perdidos**
+```{r}
+employment<-na.omit(employment.na)
+dim(employment)
+summary(employment)
+```
+
+
+**Estandarización de los datos**
+
+Existe mucha variabilidad con income y el resto de variables, al tratarse de atributos cuantitativos es recomendable tipificar para que no existan problemas de escala.
+
+```{r message=FALSE, warning=FALSE}
+# Normalización a través del criterio min-max
+norm.employment=data.Normalization (employment, type="n4", normalization="column")
+summary(norm.employment)
+```
+
+
+**Diagrama de caja**
+
+```{r}
+boxplot(norm.employment, col=c("royalblue", "darkblue"), outcol="red")
+```
+
+
+**Cálculo de la matriz de correlaciones**
+```{r}
+R<- cor(norm.employment)
+round(R,2)
+```
+**Determinante de la matriz de correlaciones**
+```{r}
+det(R)
+```
+Observamos que la correlación entre cada 2 variables no es muy elevada, pero que el determinante de la matriz de correlaciones es próximo a 0, lo que indica que las variables están altamente correladas
+
+**Representación gráfica de la matriz de correlaciones**
+```{r}
+corrplot(R, method="ellipse")
+corrplot(R, method="number")
+```
+
+## 2.1.2 Análisis de componentes principales usando *princomp*
+
+```{r}
+employment.acp<- princomp(employment, cor = TRUE) # cor=TRUE para tipificar los datos
+summary(employment.acp)
+```
+
+**Tabla resumen con los valores de interés**
+```{r}
+resumen<- matrix(NA, nrow=length(employment.acp$sdev), ncol=3)
+resumen[,1]<-  employment.acp$sdev^2
+resumen[,2]<- 100*resumen[,1]/sum(resumen[,1])
+resumen[,3]<- cumsum(resumen[,2])
+colnames(resumen)<- c("Autovalor","Porcentaje","Porcentaje acumulado")
+round(resumen, 4)
+```
+
+**Gráfico de sedimentación**
+```{r}
+plot(resumen[,1], type="h", main="Datos Employment", ylab="Autovalor")
+abline(h=mean(resumen[,1]), lwd=2, lty=2, col="blue")
+```
+
+## 2.1.3 Selección del número de componentes principales
+
+Existen diferentes criterios para seleccionar el número de componentes principales: 
+
+1) Porcentaje acumulado mayor que un umbral
+
+Si tomamos como umbral el *80%*, entonces tomaríamos las 5 primeras componentes principales.
+
+
+2) Autovalores superiores a la media
+
+Si seguimos este criterio también nos quedaríamos con las 4 primeras componenentes principales, que son las que presentan autovalores mayor a la media (1)
+
+
+3) Mediante contrastes de hipótesis
+
+En primer lugar comprobamos normalidad multivariante como condición para utilizar este método inferencial
+
+```{r}
+source("Test_Mardia.r")
+Test_Mardia(employment)
+```
+
+Obtenemos: *p.value.skew*, *p.value.small* y *p.value.kurt* igual a 0. Por tanto, no se acepta la normalidad multivariante, esto implica que no es posible seleccionar el número de componentes principales usando método inferencial.
+
+
+**Coeficientes que definen la combinación lineal de las variables y las componentes principales**
+
+```{r}
+round(loadings(employment.acp), 3)
+```
+
+
+
+**correlaciones entre las variables y la componentes**
+```{r}
+correlaciones<-loadings(employment.acp)%*%diag(employment.acp$sdev)
+round(correlaciones, 3)
+```
+
+**Representación gráfica de la variabilidad de las puntuaciones de las componentes principales**
+```{r}
+boxplot(employment.acp$scores, 
+        col=c("royalblue", "darkblue"),
+        outcol="red", notched=TRUE)
+```
+Observamos que la varianza va decreciendo
+
+
+
+### 2.1.3.1 Representación con 4 componentes principales
+
+**Cálculo de los autovalores y autovectores**
+```{r}
+descompespec<-eigen(R)
+autovalores<- descompespec$values
+autovectores<- descompespec$vectors
+```
+
+**Comunalidades con 4 componentes principales**
+
+Comunalidades para cada variable, es la suma de correlaciones cuadrado con las c.p. seleccionadas
+```{r}
+cbind(apply(correlaciones[,1:4]^2, 1, sum))  
+```
+Las comunalidades para 4 componentes no son bajas, por lo que todas las variables quedan explicadas con 4 CP. El caso más desfavorable es del de la variable *middleempl*, con una comunalidad *0.56*
+
+**Correlaciones reproducidas con 4 componentes principales**
+```{r}
+#Matriz de correlaciones reproducidas
+Raprox4<- autovectores[,1:4]%*%diag(autovalores[1:4])%*%t(autovectores[,1:4])
+```
+
+**Correlación residual con 4 componentes**
+```{r}
+Resid4 = R - Raprox4
+corrplot(Resid4)
+mean((Resid4)^2)
+```
+
+### 2.1.3.2 Representación con 5 componentes principales
+
+**Comunalidades con 5 componentes principales**
+```{r}
+cbind(apply(correlaciones[,1:5]^2, 1, sum))  
+```
+
+**Correlaciones reproducidas con 5 componentes principales**
+```{r}
+#Matriz de correlaciones reproducidas
+Raprox5<- autovectores[,1:5]%*%diag(autovalores[1:5])%*%t(autovectores[,1:5])
+```
+
+**Correlación residual con 5 componentes**
+```{r}
+Resid5 = R- Raprox5
+mean( (Resid5) ^ 2 )
+corrplot(Resid5)
+```
+
+
+Observamos que con 5 CP las variable originales quedan mejor explicadas, pero nos podemos quedar con 4 CP porque tambien se obtienen resultados aceptables. 
+Las correlaciones residuales con 4 y 5 componentes tambien disminuye de 0.0220 a 0.0112 respectivamente. 
+
+
+## 2.1.4 Rotación ortogonal varimax
+```{r}
+acprot<- varimax(loadings(employment.acp)[,1:4])
+summary(acprot)
+loadings(acprot)
+```
+
+**Puntuaciones de las componentes rotadas**
+```{r}
+punturota<- employment.acp$scores[,1:4]%*%acprot$rotmat
+```
+
+
+**Correlaciones entre las variables y las 4 componentes seleccionadas rotadas**
+```{r}
+corr_rot=cor(employment, punturota)
+round(corr_rot, 4)
+round(correlaciones[,1:4], 4)
+```
+
+**Representación gráfica**
+```{r}
+plot(punturota[,1],punturota[,2], type="n",
+     main ="ACP rotado employment CP1 y CP2",
+     xlab="C.P.1", ylab="C.P.2")
+
+text(punturota[,1], punturota[,2], cex=0.6)
+
+abline(h=0, v=0, lty=2, col="blue")
+```
+```{r}
+plot(punturota[,3],punturota[,4], type="n",
+     main ="ACP rotado employment CP3 y CP4",
+     xlab="C.P.3", ylab="C.P.4")
+
+text(punturota[,3], punturota[,4], cex=0.6)
+
+abline(h=0, v=0, lty=2, col="blue")
+```
+
+# Ejercicio 2.2
+
+Realizar e interpretar un análisis de componentes principales para datos mixtos sobre la unión de *gironde$employment* y *gironde$services*
+
+
+## 2.2.1 Carga, inspección y preparación de los datos
+
+###Carga de los datos
+
+```{r}
+data(gironde)
+services<-gironde$services
+head(services)
+str(services)
+summary(services)
+dim(services)
+```
+
+###Union de los datos employment y services
+```{r}
+mix_data.na=cbind(employment.na, services)
+str(mix_data.na)
+summary(mix_data.na)
+dim(mix_data.na)
+```
+
+###Eliminación de valores perdidos
+```{r}
+mix_data<-na.omit(mix_data.na)
+summary(mix_data)
+dim(mix_data)
+```
+
+
+## 2.2.2 Análisis de componentes principales para datos mixtos con PCAmix
+
+###División en variables cualitativas y cuantitativas
+
+Construccion de ambos conjuntos de datos: variables cuantitativas (mix_data_quan) y culitativas (mix_data_qual)
+
+```{r}
+split<-splitmix(mix_data) 
+str(split)
+mix_data_quan<-split$X.quanti
+mix_data_qual<-split$X.quali
+```
+
+###Se aplica PCAmix
+
+No tipifico ni convierto las variables categóricas porque PCAmix ya lo preprocesa
+```{r}
+res.pcamix<-PCAmix(X.quanti=mix_data_quan, 
+                   X.quali=mix_data_qual, 
+                   rename.level=TRUE, 
+                   graph=FALSE)
+
+summary(res.pcamix)
+```
+
+
+###Autovalores
+```{r}
+round(res.pcamix$eig, 3)
+```
+
+###Gráfico de sedimentación
+```{r}
+plot(res.pcamix$eig[,1], type="h", main="Datos", ylab="Autovalor")
+abline(h=mean(res.pcamix$eig[,1]), lwd=2, lty=2, col="blue")
+```
+Tomo las 8 primeras componentes que son las que tienen autovalor > 1. Estas 8 componentes explican un *68.6%* de la varianza total.
+
+Por defecto PCAmix muestra las 5 primeras componentes, utilizo el parámetro *ndim* para que muestre 8.
+```{r}
+res.pcamix8<-PCAmix(X.quanti=mix_data_quan, 
+                   X.quali=mix_data_qual, 
+                   rename.level=TRUE,
+                   ndim=8,
+                   graph=FALSE)
+
+summary(res.pcamix8)
+```
+
+###Inercia total
+```{r}
+# Inercia total p1+m-p2
+# p1: numero de variables cuantitativas
+# p2: numero de variables cualitativas
+# m: numero total de categorias de todas las variables categóricas
+sum(res.pcamix8$eig[,1])
+```
+
+###Squared loading
+A continuación mostraremos los valores de *squared loading* de cada variable, que es la contribución de esta variable a cada compomente. Es decir, la parte de varianza de la componete considerada explicada por la variable.
+```{r}
+round(res.pcamix8$sqload, 3)   
+```
+
+Para cada variable cuantitativa la suma de las squared loadings de cada componente suman 1. Para las variables cualitativas la suma corresponderá al número de categorías diferentes a 0. Por tanto, si sumamos las filas de la matriz anterior otendremos un valor algo menor al esperado porque solo hemos tomado 8 componentes.
+
+```{r}
+apply(res.pcamix8$sqload, 1, sum)  
+```
+
+Veamos que el resultado cuando tomamos las 25 componentes:
+
+```{r}
+res.pcamix25<-PCAmix(X.quanti=mix_data_quan, 
+                   X.quali=mix_data_qual, 
+                   rename.level=TRUE,
+                   ndim=25,
+                   graph=FALSE)
+
+
+apply(res.pcamix25$sqload, 1, sum)  
+```
+
+###Contribuciones relativas
+La inercia total se reparte entre las distintas dimensiones, permite determinar el nivel de realación entre cada variable y cada componente. A continuación calcularemos las contribuciones relativas para las variables cualitativas y cuantitativas
+
+```{r}
+A=rbind(100*res.pcamix8$quali$contrib.pct, # Contribuciones relativas de las cualitativas
+        res.pcamix8$quanti$contrib.pct)    # Contribuciones porcentuales de las cuantitativas
+
+round(A, 3)
+```
+
+Comprobamos que la suma para cada columna es igual a 100
+```{r}
+apply(A,2,sum)
+```
+
+###Coordenadas
+A continuación mostraremos las coordenadas de cada dimensión
+
+```{r}
+head(res.pcamix8$ind$coord)
+
+#Coordenadas de las categ. de las cualitativas:
+res.pcamix8$levels$coord 
+```
+
+
+
+### Representacion gráfica
+
+
+**Variables cualitativas**
+```{r}
+plot(res.pcamix8, choice="levels",
+     axes=c(1,2), xlim=c(-1, 3),
+     cex=0.5, main="Levels")
+```
+Ampliamos el primer cuadrante del gráfico anterior
+```{r}
+plot(res.pcamix8, choice="levels",
+     axes=c(1,2), xlim=c(-1, 1), ylim=c(0, 0.5),
+     cex=0.5, main="Levels")
+```
+
+Se observa que la dimensión 1 separa las ciudades en funcion del número de servicios que ofrezcan. Las ciudades con mayor número de servicios quedan a la derecha (toman valores mayores) mientras que las que ofrecen menor número de servicios quedan a las izquierda.
+
+El primer cuadrante (Dim1<0, Dim2>0) es el que presenta menor procentaje de servicios.
+
+El segundo cuadrante (Dim 1>0, Dim 2 >0) es el que presenta el mayor porcentaje de servicios.
+
+
+**Observaciones**
+
+Se representarán algunas de las observaciones 
+```{r}
+plot(res.pcamix8, choice="ind", axes=c(1,2),
+     coloring.ind=mix_data_qual$postoffice,
+     label=FALSE,
+     posleg="bottomright", main="Observations postoffice")
+
+
+plot(res.pcamix8, choice="ind", axes=c(1,2),
+     coloring.ind=mix_data_qual$nursery,
+     label=FALSE,
+     posleg="bottomright", main="Observations nursery")
+
+plot(res.pcamix8, choice="ind", axes=c(1,2),
+     coloring.ind=mix_data_qual$doctor,
+     label=FALSE,
+     posleg="bottomright", main="Observations doctor")
+```
+Se observa un comportamiento similar al mencionado anteriormente. Las ciudades con mayor porcentaje de servicios se encuentran en la parte derecha.
+
+**Variables numéricas**
+```{r}
+plot(res.pcamix8, choice="cor", axes=c(1,2),
+     main="Numerical variables",
+     cex=0.5)
+```
+
+Se observa que el número de trabajadores (workers) está inversamente correlado con el salario medio (income) y con el número de directores (managers).
+
+Tambien se observa que el número de desempleados (unemployed) presenta correlación inversa con el número de profesionales cualificado (tradesmen) y con la tasa de empleo (employrate)
+
+Si relacionamos este gráfico con el anterior observamos que las ciudades donde el salario medio es mayor hay mayor número de servicios.
+
+Para la dimensión 3
+```{r}
+plot(res.pcamix8, choice="cor", axes=c(1,3),
+     main="Numerical variables",
+     cex=0.5)
+```
+Observamos al representar la dimensión 3 que queda bastante explicada con la variable *retired*.
+
+**Todas las variables**
+
+Dimensión 1 vs Dimensión 2
+```{r}
+plot(res.pcamix8, choice="sqload", axes=c(1,2), 
+     coloring.var="type", leg=TRUE, 
+     xlim=c(-0.1,1.05),posleg="topright", 
+     main="All variables",
+     cex=0.7)
+
+str(mix_data_qual)
+```
+
+ Dimensión 1 vs Dimensión 3
+```{r}
+plot(res.pcamix8, choice="sqload", axes=c(1,3), 
+     coloring.var="type", leg=TRUE, 
+     xlim=c(-0.1,1.05),posleg="topright", 
+     main="All variables",
+     cex=0.7)
+
+str(mix_data_qual)
+```
+
+Vemos que la dimensión 3 queda explicada con las variables numéricas, mientras que la dimensión 1 está mejor explicada por las categóricas.
+
+# Ejercicio 2.3
+
+Aplicar procedimientos de selección de variables para construir modelos de regresión lineal donde *income* es la variable dependiente, sobre *gironde$employment*
+
+
+## 2.3.0 Preparación de los datos
+
+**Inspección de los datos**
+
+Tomamos el dataset *employment* construido en los apartados anteriores y para el que ya se han eliminado los valores perdidos
+```{r}
+# comprobamos que el numero de valores perdidos es igual a 0, todos los registros son completos
+sum(is.na(employment))
+head(employment)
+summary(employment)
+str(employment)
+```
+Comprobamos que no contiene ninguna variable categórica, son todas numéricas, por tanto no hay que realizar ninguna conversión, ya que el algoritmo genético con la librería *GA* necesita que las variables del conjunto de datos de entrada sean numéricas.-
+
+**Partición en entrenamiento y test**
+
+Para poder comparar los modelos que vamos a construir necesitamos dividir los datos en conjunto test y conjunto de entrenamiento, asi conseguiremos capacidad de generalización comparando R2 y error cometido en los datos test. Destinaremos el 75% a entrenamiento y reservaremos el 25% para test
+
+```{r}
+set.seed(123456789)
+n=nrow(employment)
+indices=1:n
+index_train=sample(indices, floor(0.75*n))
+index_test<- setdiff(indices, index_train)
+
+employ_train=employment[index_train,]
+employ_test=employment[index_test,]
+```
+
+A continuación se construirán 3 modelos lineales diferentes, uno sin selección de variables para comparar con el resto, y otros dos modelos realizando previamente selección de variables, uno de ellos usando exploración completa con la librería *leaps*, y el otro modelos realizando selección de variables mediante algoritmos genéticos
+
+## 2.3.1 Modelo de regresion lineal con todas las variables
+
+Utilizamos la función *Ajuste* vista en clase para calcular MSE, RMSE, R2 y R2 ajustado de cada modelo. La función ha sido ligeramente modificada para que tambien calcule el R2 ajustado, ya que estamos comparando modelos distintos con número de variables distintos.
+
+```{r}
+Ajuste<- function(y, pred, n, k, titulo)
+{
+  residuos=y-pred
+  plot(y,pred,main=titulo,ylab=expression(hat(y)))
+  abline(a=0,b=1,col="blue",lwd=2)
+  grid()
+  MSE= mean(residuos^2)
+  RMSE= sqrt(MSE)
+  R2= cor(y,pred)^2
+  R2_ajust=1-(n-1)*(1-R2)/(n-k-1)
+  return(list(MSE=MSE, RMSE=RMSE, R2=R2, R2_ajust=R2_ajust))
+}
+```
+
+
+```{r}
+m_full=lm(employ_train$income~.,data=employ_train)
+summary(m_full)
+pred_full=predict(m_full, employ_test)
+
+# Número de variables independientes en el modelo m_full
+k_full=length(employ_test[1,])-1
+
+# Tamaño de la muestra test
+n_test=length(employ_test[,1])
+
+(ajuste_full=Ajuste(employ_test$income, pred_full, n_test, k_full, "Todas las variables (m_full)"))
+```
+
+Se observa que los p-valores son todos >0.05, por tanto todas las variables son significativas. El R2 obtenido es muy bajo, el modelo no se ajusta bien.
+
+
+## 2.3.2 Modelo de regresión lineal con selección de variables mediante exploración completa (leaps)
+
+
+```{r}
+exh_search=regsubsets(income~.,data=employ_train, nvmax=13)
+(resumen=summary(exh_search))
+
+resumen$rsq
+# Representación grafica
+plot(resumen$adjr2, type="l")
+plot(resumen$cp, type="l")
+plot(resumen$bic, type="l")
+
+
+which.min(resumen$cp)
+which.min(resumen$bic)
+compos<- which.min(resumen$bic)
+
+# Variables seleccionadas
+vsel<- colnames(resumen$which)[resumen$which[compos,]]
+vsel
+
+# Se elimina el término independiente (Intercept)
+vsel=vsel[-1]
+formula <- as.formula(paste("income ~ ", paste(vsel, collapse= "+")))
+formula
+
+# Modelo resultante
+m_exh_search<- lm(formula, data=employ_train)
+
+# Cálculo de las predicciones
+pred_exh_search=predict(m_exh_search, newdata=employ_test)
+
+
+# Medida del ajuste
+(ajuste_exh_search=Ajuste(employ_test$income, pred_exh_search, n_test, compos, "Exploración completa (m_exh_search)"))
+```
+
+Nuevamente obtenemos un R2 ajustado bajo, el modelo no se ajusta bien a los datos.
+
+
+
+## 2.3.3 Modelo de regresión lineal con selección de variables mediante algortimos genéticos
+
+
+
+```{r}
+# La variable respuesta es el salario
+xent <- as.matrix(employment[index_train, names(employment)!="income"])
+yent <- employment[index_train, "income"]
+
+
+# Función de actitud para maximizar
+fitness <- function(string)
+{ 
+  inc <- which(string==1)
+  X <- cbind(1, xent[,inc])
+  mod <- lm.fit(X, yent)
+  class(mod) <- "lm"
+  -AIC(mod)
+}
+
+
+# Modelo
+AG <- ga("binary", fitness = fitness, nBits = ncol(xent), names = colnames(xent))
+
+summary(AG)
+
+# Ajuste del modelo resultante
+posicvariables=which(AG@solution==1)
+datos_sel=data.frame(income=employment[,"income"],
+                     employment[,posicvariables])
+
+
+summary(datos_sel)
+modeloAG=lm(income~., data=datos_sel[index_train,])
+summary(modeloAG)
+
+
+AG.pred=predict(modeloAG, datos_sel[-index_train,])
+
+dim(employ_test)
+
+# Medida del ajuste
+(ajuste_AG=Ajuste(employ_test$income, AG.pred, n_test, ncol(datos_sel), "Algoritmos genéticos"))
+
+```
+
+
+```{r}
+# La variable respuesta es el salario
+xent <- as.matrix(employment[index_train, names(employment)!="income"])
+yent <- employment[index_train, "income"]
+
+
+# Función de actitud para maximizar
+fitness <- function(string)
+{ 
+  inc <- which(string==1)
+  X <- cbind(1, xent[,inc])
+  mod <- lm.fit(X, yent)
+  class(mod) <- "lm"
+  -AIC(mod)
+}
+
+
+# Modelo
+AG <- ga("binary", fitness = fitness, nBits = ncol(xent), names = colnames(xent))
+
+summary(AG)
+
+# Ajuste del modelo resultante
+posicvariables=which(AG@solution==1)
+datos_sel=data.frame(income=employment[,"income"],
+                     employment[,posicvariables])
+
+
+summary(datos_sel)
+modeloAG=lm(income~., data=datos_sel[index_train,])
+summary(modeloAG)
+
+
+AG.pred=predict(modeloAG, datos_sel[-index_train,])
+
+dim(employ_test)
+
+# Medida del ajuste
+(ajuste_AG=Ajuste(employ_test$income, AG.pred, n_test, ncol(datos_sel), "Algoritmos genéticos"))
+
+```
+La primera vez que aplico algoritmos genéticos no consigo reducir variables ni mejorar el R2, pero aplicándolo 2 veces sí selecciona variables.
+
+## 2.3.4 Resultados y conclusiones
+
+Construimos una tabla resumen de todos los procedimientos de selección de variables utilizados en este ejercicio para poder comparar los resultados obtenidos y sacar conclusiones.
+
+```{r}
+table_full=c(ajuste_full$MSE, ajuste_full$RMSE, ajuste_full$R2, ajuste_full$R2_ajust)
+
+table_AG=c(ajuste_AG$MSE, ajuste_AG$RMSE, ajuste_AG$R2, ajuste_AG$R2_ajust )
+
+table_exh=c(ajuste_exh_search$MSE, ajuste_exh_search$RMSE, 
+            ajuste_exh_search$R2, ajuste_exh_search$R2_ajust)
+
+
+tabla_resumen = data.frame (round(rbind(table_full, table_AG, table_exh), 3), 
+                            row.names=c("Modelo completo", 
+                                        "Modelo con algoritmos genéticos",
+                                        "Modelo búsqueda exhaustiva"))
+
+print(knitr::kable(tabla_resumen, format = "pandoc",
+                   col.names = c("MSE", "RMSE", "R2", "R2_ajust"), align='c'))
+```
+
+
+Obtenemos un error alto y un R2 ajustado bajo para los 3 procedimientos de selección de variables. De entre los 3 utilizados en este ejecicio el que mejores resultados ofrece es el de búsqueda exhaustiva.

@@ -1,0 +1,429 @@
+---
+title: "Evaluación MLI: Ejercicio 1 (Analisis conglomerados)"
+author: "Inmaculada Perea Fernández"
+date: "Abril 2017"
+output: pdf_document
+---
+
+Leer el fichero *Crimen.dat*, que contiene el total de delitos por cada 100.000 habitantes para cada uno de los estados de EEUU más el distrito de Columbia (Año 1986). Aplicar y comparar tres técnicas de análisis de conglomerados, una de tipo jerárquico, otra de tipo partición y el método basado en mixturas de normales multivariantes.
+
+
+**Carga de librerías necesarias**
+
+```{r message=FALSE, warning=FALSE}
+if (!require('cluster')) install.packages('cluster'); library('cluster')
+if (!require('clusterSim')) install.packages('clusterSim'); library('clusterSim')
+if (!require('corrplot')) install.packages('corrplot'); library('corrplot')
+if (!require('mclust')) install.packages('mclust'); library('mclust')
+if (!require('fpc')) install.packages('fpc'); library('fpc')
+```
+
+
+
+# 1 Obtención e inspección del conjunto de datos
+
+
+## 1.1 Carga de los ficheros de datos 'crimen.dat'
+```{r}
+crimen <- read.table(file="Crimen.dat", encoding='UTF-8', header=TRUE)
+dim(crimen)
+names(crimen)
+head(crimen, 3)
+str(crimen)
+summary(crimen)
+```
+
+## 1.2 Estudio valores perdidos
+```{r}
+table(is.na(crimen))
+```
+No existen valores perdidos
+
+
+## 1.3 Estudio de la multicolinealidad
+
+
+**Cálculo de la matriz de correlaciones**
+```{r}
+R<- cor(crimen)
+round(R,2)
+```
+
+
+**Determinante de la matriz de correlaciones**
+```{r}
+det(R)
+```
+
+
+**Representación gráfica de la matriz de correlaciones**
+```{r}
+corrplot(R, method="number")
+```
+
+Observamos que la correlación entre cada 2 variables no es muy elevada en la mayoría de los casos, pero que el determinante de la matriz de correlaciones es próximo a 0, lo que indica que las variables están altamente correladas. Las variables que presenta más correlación son en este orden:
+
+- *Atraco* y *Asesinato* (0.8)
+- *Atraco* y *Robo_vehículo* (0.79)
+- *Agresión* y *Asesinato* (0.78)
+
+
+## 1.4 Estudio valores atípicos (Outliers)
+
+Diagrama de caja de cada variable
+```{r}
+par(mfrow = c(2,4))
+outlier_asesinato <- boxplot(crimen$Asesinato,
+                              las=1,
+                              main="Asesinatos",
+                              col=c("royalblue", "darkblue"),
+                              outcol="red")
+
+outlier_atraco <- boxplot(crimen$Atraco,
+                              las=1,
+                              main="Atraco",
+                              col=c("royalblue", "darkblue"),
+                              outcol="red")
+
+
+outlier_abuso <- boxplot(crimen$Abusos,
+                              las=1,
+                              main="Abusos",
+                              col=c("royalblue", "darkblue"),
+                              outcol="red")
+
+outlier_agresion <- boxplot(crimen$Agresión,
+                              las=1,
+                              main="Agresión",
+                              col=c("royalblue", "darkblue"),
+                              outcol="red")
+
+
+outlier_robo_domicilio <- boxplot(crimen$Robo_domicilio,
+                                  las=1,
+                                  main="Robo en domicilio",
+                                  col=c("royalblue", "darkblue"),
+                                  outcol="red")
+
+outlier_hurto <- boxplot(crimen$Hurto,
+                                las=1,
+                                main="Hurto",
+                                col=c("royalblue", "darkblue"),
+                                outcol="red")
+
+outlier_robo_vehiculo <- boxplot(crimen$Robo_vehículo,
+                                las=1,
+                                main="Robo de vehículo",
+                                col=c("royalblue", "darkblue"),
+                                outcol="red")
+```
+
+Estado al que pertenece el valor atípico en la variable *Asesinato*
+```{r message=FALSE, warning=FALSE}
+#outlier_asesinato$out
+row.names(crimen[crimen$Asesinato == outlier_asesinato$out, , drop = FALSE])
+```
+
+Estados a los que pertenecen los valores atípicos en la variable *Atraco*
+```{r message=FALSE, warning=FALSE}
+#outlier_atraco$out
+row.names(crimen[crimen$Atraco== outlier_atraco$out, , drop = FALSE])
+```
+
+Observamos que la variable *Asesinato* presenta 1 valor atípico en el distrito DC. Y la variable *Atraco* presenta 2 valores outliers, uno para el distrito DC y otro para NY.
+
+## 1.5 Representación gráfica
+```{r}
+plot(crimen, col="blue")
+```
+
+## 1.6 Conclusiones análisis exploratorio
+
+Todas las variables son numéricas, no será necesario realizar conversiones de variables.
+
+Después del análisis exploratorio de los datos se decide eliminar la variable *Atraco* del estudio por las siguientes razones:
+
+- Presenta una correlación elevada (0.8) con la variable *Asesinato*, por lo que *Atraco* queda explicada con *Asesinato*, y puede resultar irrelevante para este estudio.
+
+- La variable *Atraco* presenta 2 valores outliers (DC, NY), mientras que *Asesinato* presenta solo uno (DC). Por tanto, al eliminar la variable *Atraco* del estudio elimino 2 de los tres valores atípicos encontrados.
+
+No se va a eliminar de momento el valor atípico para *Asesinato*, porque puede resultar de interés para el estudio, ya que tenemos pocos datos de cada estado, y si eliminamos DC del estudio puede que perdamos información. Sería interesante comparar el resultado de este estudio incluyendo DC y sin incluirlo para ver si forma o no un grupo aislado.
+
+
+Construimos el nuevo conjunto de datos eliminando la variable *Atraco* 
+
+```{r}
+crimen_wo_atraco=crimen[,-3]
+summary(crimen_wo_atraco)
+``` 
+
+
+
+# 2 Técnicas jerárquicas
+
+## 2.1 Cálculo de la matriz de distancias
+
+Es conveniente tipificar previamente al cálculo de la matriz de distancias, ya que la mayoría de las distancias medidas son bastante sensibles a las diferentes escalas o magnitudes de las variables, teniendo más impacto en el valor final de la similitud. Para evitar esto estandarizaremos para que las variables tengan media 0 y desviación típica igual a 1. Algunas funciones de las librerías de análisis de conglomerados disponibles en R tienen opción de tipificar los datos, pero la función dist no.
+
+```{r}
+crimen.tipif=scale(crimen_wo_atraco, center=TRUE, scale=TRUE)
+summary(crimen.tipif)
+``` 
+
+
+```{r}
+D.crimen_manhttan <- dist(crimen.tipif, method = "manhattan")
+D.crimen_euclidean <- dist(crimen.tipif, method = "euclidean")
+```
+
+
+## 2.2 Anáisis de conglomerados: técnicas jerárquicas aglomerativas
+
+Las técnicas jerárquicas de análisis de conglomerados se dividen en aglomerativas y divisivas. A continuación se realizará un estudio usando técnica jerárquica **aglomerativa**, que suelen proporcionar mejores resultados que los divisivos.
+
+Comprobaremos en primer lugar si el outlier que no eliminamos en la variable *Asesinato* para el estado *DC* influye en exceso en el análisis, y tiende a que el estado DC forme un cluster aislado. Representaremos el dendograma obtenido con *hclust* para diferentes métodos de aglomeración (*ward.D* y *average*) y diferentes distancias (*manhattan* y *eclidean*)
+```{r}
+crimen.hclust_average_manhattan <-hclust(D.crimen_manhttan)
+crimen.hclust_ward_manhattan <-hclust(D.crimen_manhttan, method = "ward.D")
+crimen.hclust_average_euclidean <-hclust(D.crimen_euclidean)
+crimen.hclust_ward_euclidean <-hclust(D.crimen_euclidean, method = "ward.D")
+```
+
+
+```{r}
+plot(crimen.hclust_average_euclidean, main="Dendrograma Crimen (average, euclidean)",
+     las=1, hang=0.1, col="blue")
+
+plot(crimen.hclust_ward_euclidean, main="Dendrograma Crimen (Ward, euclidean)",
+     las=1, hang=0.1, col="blue")
+
+plot(crimen.hclust_average_manhattan, main="Dendrograma Crimen (average, manhattan)", 
+     las=1, hang=0.1, col="blue")
+
+plot(crimen.hclust_ward_manhattan, main="Dendrograma Crimen (Ward, manhattan)", 
+     las=1, hang=0.1, col="blue")
+```
+Observamos que para el método de aglomeración *Average* el distrito *DC* tiende a formar un cluster separado, por lo que parece que el outlier sí influye para este método. Sin embargo usando *Ward* el distrito *DC* se une con el resto de clusters y el outlier no parece influir en exceso. Debido a lo anterior decidimos mantener el outlier y haremos un análisis con la funcion agnes usando el método *Ward*. Probaremos a usar la distancia manhattan y ecludiea y nos quedaremos con la que presente un mayor coeficiente de aglomeración.
+
+Usamos la función *agnes* de de la libreria *cluster*. El parámetro *stand* a TRUE y los datos sin tipificar, para que se encargue la propia función *agnes*. El método clustering seleccionamos *Ward*. 
+```{r}
+hier_aglo_manhattan = agnes(x=crimen_wo_atraco, metric="manhattan", method="ward", stand=TRUE)
+round(hier_aglo_manhattan$ac, 3)
+
+hier_aglo_euclidean = agnes(x=crimen_wo_atraco, metric="euclidean", method="ward", stand=TRUE)
+round(hier_aglo_euclidean$ac, 3)
+```
+
+Observamos que presenta mejor coeficiente de aglomeración usando la distancia *manhattan*, por tanto continuaremos con el análisis usando esta distancia.
+
+La selección del número de conglomerados puede hacerse identificando cambios bruscos de pendiente en la gráfica de las distancias de unión. A continuación representaremos la gráfica de distancia entre clusters 
+```{r}
+plot(hier_aglo_manhattan$height, type="l", col="blue",
+     xlab="Nº de iteración", ylab="Distancia entre clusters")
+grid()
+```
+
+Observamos que existen multitud de cambios bruscos en la pendiente de la gráfica anterior, pero uno de ellos destaca frente al resto, por ello, nos quedaremos con 2 clusters, aunque el número de clusters depende en gran medida del problema y de la opinion experta de los datos.
+
+```{r}
+plot(hier_aglo_manhattan, main="Dendograma (técnicas jerárquicas aglomerativas)", 
+     xlab="Estados EEUU", ylab="distancia entre clusters")
+rect.hclust(hier_aglo_manhattan, k=2)
+```
+
+Calculamos los centros de cada conglomerado 
+```{r}
+nc<- 2
+pertenencia<-cutree(hier_aglo_manhattan, k=2)
+centros <- NULL
+     for(k in 1:nc){
+       centros <- rbind(centros, colMeans(crimen.tipif[pertenencia== k, ]))
+     }
+row.names(centros)<- 1:nc
+round(centros, 3)
+```
+
+
+Calcularemos los valores del estadístico F del ANOVA de 1 factor y representaremos gráficamente las variables que presenten mayor valor de F ANOVA
+```{r}
+cbind(apply(crimen.tipif, 2, function(x) summary(lm(x~factor(pertenencia)))$fstatistic[1]))
+```
+
+Las variables que presentan mayor valor del estadístico F ANOVA son *Robo_domicilio* y *Abusos*
+
+A continuación representaremos un diagrama de dispersión de las 2 variables con mayor valor F ANOVA con los 2 clusters seleccionados 
+```{r}
+colores<- c("blue","green")
+
+plot(crimen.tipif[,c(2,4)], type="n", main="Resultado clusters")
+text(crimen.tipif[,c(2,4)], labels=row.names(crimen.tipif),col=colores[pertenencia])
+text(centros[,1], centros[,2], labels=row.names(centros), cex=0.1, col=colores)
+grid()
+```
+
+```{r}
+hier.sil=silhouette(cutree(crimen.hclust_ward_manhattan, k=2),  
+                    as.dist(D.crimen_manhttan))
+
+plot(hier.sil, col="blue", main="Silueta para cada cluser (método jerárquico)")
+```
+
+La silueta media es *0.46*, no está próxima a 1, por tanto esta técnica no nos proporciona una estructura fuerte. Se puede también observar que el distrito *NY* en el gráfico de dispersión no está muy bien separado en ninguno de los dos clusters. 
+
+
+# 3 Técnicas de partición
+
+## 3.1 Cálculo de la k óptima
+
+Entre los métodos de partición estudiados encontramos *k-medias* y *k-mediodes*. En este análisis utilizaremos *k-mediodes*, ya que es más robusto frente a valores atípicos. Además la salida de la función *pam* de la librería *cluster* es más amplia y da más información. Usaremos *pam* y no *clara* porque el conjunto de datos es pequeño.
+
+La función pam necesita el valor de *k* (número de clusters) como parámetro de entrada. A continuación vamos a calcular con qué valor de *k* se obtiene mejor anchura media de silueta del conjunto de datos (*avg.width*), que nos da una medida de cómo de bien clasificado está con la *k* correspondiente. Calcularemos las silueta para *k* en el intervalo [2, 8] 
+
+```{r}
+for(k in 2:8){cat("k=",k," |  silhouette=", round(pam(crimen.tipif, k)$silinfo$avg.width, 3), "\n")}
+```
+Vemos que la mejor *k* es k=2, con una anchura de silueta igual a *0.384*. Es un valor bajo, aun peor que con la técnica jerárquica, por tanto la estructura es débil y habría que probar otros métodos.
+
+
+## 3.2 Análisis conglomerados con k-mediodes
+
+```{r}
+kmediods=pam(crimen.tipif, 2)
+(sum_kmediods=summary(kmediods))
+```
+
+La anchura de silueta para el cluster 2 es muy baja, la estructura es débil.
+```{r}
+sum_kmediods$silinfo$clus.avg.widths
+```
+
+## 3.3 Representación gráfica
+
+**Mediodes de cada cluster**
+
+```{r}
+plot(crimen.tipif, type="n")
+text(crimen.tipif, labels=row.names(crimen.tipif), col="blue", cex=0.5)
+points(kmediods$medoids, col=c("red", "green"), lwd=3)
+```
+
+Representación de los cluster mediante las componentes principales
+
+```{r}
+clusplot(kmediods, main="k-mediodes, k=2")
+```
+
+```{r}
+plot(silhouette(kmediods), col="blue", main="Silueta para cada cluster (k-meidiodes)")
+```
+
+Hay 5 estados que presentan anchura de silueta negativa. Esto indica que no han sido bien clasificados, porque están más cerca de un cluster distinto al que se han clasificado.
+
+```{r}
+kmediods$silinfo$widths[, 3]
+which(kmediods$silinfo$widths[, 3] < 0)
+```
+
+Los estados mal clasificados son los siguientes
+
+```{r}
+which(kmediods$silinfo$widths[, 3] < 0)
+```
+
+# 4 Técnicas mixturas de normales multivariantes
+
+## 4.1 Creación del modelo
+Con la función *Mclust* de la librería *mclust* haremos una búsqueda del mejor modelo
+```{r}
+(mixture=Mclust(crimen.tipif))
+summary(mixture)
+```
+
+## 4.2 Representación gráfica
+```{r}
+plot(mixture)
+```
+
+## 4.3 Tabla de frecuencias
+```{r}
+table(mixture$classification)
+100*prop.table(table(mixture$classification))
+```
+Los clusters están equilibrados, tienen aproximadamente el mismo número de casos.
+
+## 4.4 Probabilidad de pertenencia al grupo
+```{r}
+matz=mixture$z
+round(matz, 3)
+```
+Las probabilidades de pertenecia a cada grupo son altas.
+
+## 4.5 Estimación de parámetros
+```{r}
+Parametros<-mixture$parameters
+
+prob<-Parametros$pro 
+medias<-Parametros$mean
+var<-Parametros$variance$sigma
+```
+
+**Resumen**
+```{r}
+cat("\n  PRIMERA COMPONENTE NORMAL:
+    PI(1)=",prob[1],", mu(1)=(",medias[1,1],",",medias[2,1],").\n\n",
+    "\n SEGUNDA COMPONENTE NORMAL:
+    PI(2)=",prob[2],", mu(2)=(",medias[1,2],",",medias[2,2],").\n\n",
+    "\n TERCERA COMPONENTE NORMAL:
+    PI(3)=",prob[3],",mu(3)=(",medias[1,3],",",medias[2,3],").\n\n")
+
+var
+```
+
+# 5 Conclusiones
+A continuación compararemos los resultados obtenidos con cada una de las técnicas aplicadas en los apartados anteriores.
+
+En primer lugar utilizaremos la función *cluster.stats* de la librería *fpc* para calcular los indicadores más relevantes que nos permitan comparar.
+
+```{r}
+hier.stats=cluster.stats(D.crimen_manhttan, pertenencia)
+
+kmediods.stats=cluster.stats(D.crimen_manhttan, kmediods$cluster)
+
+mixture.stats=cluster.stats(D.crimen_manhttan, mixture$classification)
+```
+
+A continuación construiremos una tabla resumen con la silueta para cada técnica para extraer conclusiones del estudio realizado en este ejercicio.
+
+```{r results='asis'}
+silueta=c(hier.stats$avg.silwidth, 
+          kmediods.stats$avg.silwidth, 
+          mixture.stats$avg.silwidth)
+
+num_cluters=c(hier.stats$cluster.number, 
+              kmediods.stats$cluster.number,
+              mixture.stats$cluster.number)
+
+size_clusters=c(hier.stats$min.cluster.size,
+                kmediods.stats$min.cluster.size,
+                mixture.stats$min.cluster.size)
+
+
+tabla_resumen = data.frame (round(rbind(silueta, num_cluters, size_clusters), 3), 
+                            row.names=c("Valor medio silueta", 
+                                        "Numero de clusters",
+                                        "Tamaño mínimo de cluster"))
+
+print(knitr::kable(tabla_resumen, format = "pandoc",
+                   col.names = c("Jerárquico", "k-mediodes", "Mixturas"), align='c'))
+
+```
+
+El mejor modelo basándonos en el valor medio de la silueta es el obtenido mediante técnicas jerárquicas aglomerativas, ya que es el que más se aproxima a un valor de silueta igual a 1. Sin embargo, para cualquiera de las técnicas aplicadas, el valor medio de silueta está por debajo de 0.5, por tanto los datos presentan una estructura débil y la división en clusters obtenida no es muy satisfactoria para ninguna de las técnicas. Habría que probar otras técnicas.
+
+Hay más criterios a los que habría que atender para sacar conclusiones de los resultados obtenidos. Algunos de los más importantes son los siguientes:
+
+* Desigualdad de tamaño entre clusters
+* Probabilidad de pertenencia al grupo para cada caso
+* Desigualdad entre los resultados obtenidos con cada técnica: soluciones similares generalmente indican la existencia de una estructura en los datos, mientras que soluciones muy diferentes indican una estructura pobre.
+* Separación entre casos dentro de cada cluster
+* Separación entre clusters

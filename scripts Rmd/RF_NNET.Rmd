@@ -1,0 +1,268 @@
+---
+title: "Evaluación MLII (temas 1, 2, 6 y 7): Ejercicio 1"
+subtitle: "Modelos clasificación binaria (Random Forest y Perceptrón muliticapas)"
+author: "Inmaculada Perea Fernández"
+date: "mayo 2017"
+output: pdf_document
+---
+
+Cargar el data frame *LetterRecognition* de la libería *mlbench*, que contiene datos apropiado para construir un sistema de reconocimiento de caracteres. La variable *lettr* es de tipo factor, presentando 26 niveles, cada uno es una letra mayúscula. 
+
+Establecer la semilla del generador de números pseudo-aleatorios de R mediante *set.seed(m)*, siendo *m* el número obtenido con las tres últimas cifras del DNI, y elegir aleatoriamente dos letras. 
+
+Utilizando los casos que correspondan a alguna de ambas letras, construir de forma razonada y comparar modelos de clasificación binaria basados en *Random Forests* y el *Perceptrón Multicapas* (nnet).
+
+
+
+# 1 Carga, inspección y preparación de los datos
+
+## 1.1. Carga e instalación de librerías necesarias
+
+```{r message=FALSE, warning=FALSE}
+if (!require('mlbench')) install.packages('mlbench'); library('mlbench')
+if (!require('randomForest')) install.packages('randomForest'); library('randomForest')
+if (!require('nnet')) install.packages('nnet'); library('nnet')
+if (!require('e1071')) install.packages('e1071'); library('e1071')
+```
+
+
+## 1.2. Carga e inspección de los datos
+```{r}
+data(LetterRecognition)
+head(LetterRecognition)
+str(LetterRecognition)
+dim(LetterRecognition)
+```
+
+## 1.3. Elección aleatoria de dos letras
+```{r}
+set.seed("271")
+(selected_letters=sample(c(LETTERS), 2, replace=FALSE))
+```
+
+## 1.4. Extracción de los casos correspondientes a las letras seleccionadas
+```{r}
+# Filtrado de las categorías seleccionadas (G y N)
+data=LetterRecognition[which(LetterRecognition$lettr==selected_letters[1] | 
+                             LetterRecognition$lettr==selected_letters[2]), ]
+
+# Forzamos a que la variable categórica "lettr"" tenga sólo 2 categorías posibles (G y N)
+data$lettr=factor(data$lettr, levels = c("G","N"))
+head(data)
+dim(data)
+str(data)
+summary(data)
+```
+
+## 1.5. División entrenamiento y test
+Destinamos un 70% de los datos a entrenamiento y un 30% para test
+```{r}
+n=nrow(data)
+train.index=sort(sample(1:n, ceiling(0.7*n)))
+train.data=data[train.index,]
+test.data=data[-train.index,]
+```
+
+### Conjunto de entrenamiento
+```{r}
+dim(train.data)
+summary(train.data)
+```
+
+### Conjunto de test
+```{r}
+dim(test.data)
+summary(test.data)
+```
+
+# 2. Ramdon Forest
+
+A continuación construiremos un modelo basado en Ramdon Forest. 
+
+## 2.1. Cálculo de valor óptimo de m
+
+En cada nodo, se eligen aleatoriamente m < p variables predictoras, para a continuación elegir la mejor división entre esas m variables.
+
+Por defecto la librería *randomForest* construye 500 árboles y toma m=p^1/2 para problemas de clasificación, donde *p* es el número de variables predictoras. 
+
+Reducir *m* reduce tanto la correlación como la fuerza, por lo que el error aumenta. Este es el único parámetro a ajustar respecto al cual RandomForests es sensible, puede ser ajustado con procedimientos de validación cruzada o con ayuda de la función *tuneRF* de la librería *randomForest*
+
+Calcularemos a continuación el valor de *m* por defecto
+
+```{r}
+# Valor de m por defecto
+mtry.default=floor(sqrt(dim(train.data)[2]))
+mtry.default
+```
+
+Ahora con *tuneRF* calcularemos el valor óptimo de *m* que minimiza el error *OOB*
+
+```{r}
+letters.tuneRF=tuneRF(x=train.data[,-1], y=train.data[,1], stepFactor=2)
+letters.tuneRF
+```
+
+Se obtiene que el valor óptimo de *m* es 2, valor que no coincide con el que utiliza RandomForest por defecto (4), por este motivo habrá que especificar el valor obtenido en la construcción del modelo.
+
+
+## 2.2. Contrucción del bosque aleatorio
+```{r}
+RF<- randomForest(lettr ~ ., data=train.data, importance=TRUE, do.trace=FALSE, mtry=2)
+RF
+```
+
+El OOB obtenido para el modelo en el conjunto de entrenamiento es igual a 0.28%, por tanto la tasa de acierto es de 99.72%.
+
+## 2.3 Representación gráfica del error total y el de cada categoría
+```{r}
+plot(RF)
+legend("topright", col=1:3, lty=1:3, legend=c("OOB",levels(train.data$lettr)))
+grid()
+```
+El error obtenido para cada categoría es muy similar.
+
+## 2.4. Representación gráfica de la importancia de las variables
+```{r}
+varImpPlot(RF, col="blue")
+```
+Se obtienen resultados similares con ambos criterios, en ambos casos las 2 variables que presentan mayor importancia son *y.ege* y *x.ege* y las que menos presentan menor importancia son *high* y *x.box*
+
+## 2.5. Evaluación del rendimiento
+
+A continuación calcularemos el error sobre el conjunto test, y así poder comparar con el modelo que construiremos en el siguiente apartado basado en el perceptrón multicapas
+```{r}
+# Cálculo de las predicciones sobre el conjunto test
+predictest<- predict(RF, newdata=test.data, type="response")
+```
+
+```{r}
+# Tabla de confusión
+confusion.table.RF<-table(test.data$lettr, predictest)
+confusion.table.RF
+```
+
+
+```{r}
+RF.group.G.accuracy=round((100*diag(prop.table(confusion.table.RF, 2)))[1], 3)
+RF.group.N.accuracy=round((100*diag(prop.table(confusion.table.RF, 2)))[2], 3)
+RF.total.accuracy=round(100*sum(diag(prop.table(confusion.table.RF))), 3)
+
+
+cat(" Acierto grupo G  =\t",
+    RF.group.G.accuracy,"\n",
+    "Acierto grupo N  =\t",
+    RF.group.N.accuracy,"\n",
+    "Acierto total    =\t",
+    RF.total.accuracy,"\n")
+```
+
+Con Random Forest hemos obtenido un modelo muy satisfactorio con una tasa de acierto bastante elevada que funciona muy bien con el conjunto de datos LetterRecognition y con las letras seleccionadas aleatoriamente.
+
+# 3. Perceptrón multicapas
+
+A continuación construiremos un modelo basado en el Perceptrón multicapa.
+
+## 3.1. Tipificación de las variables predictoras
+
+No conviene que las variables predictoras tengan valores dispares, por tanto es recomendable tipificar.
+
+En primer lugar se tipificará el conjunto de entrenamiento usando la función *scale*, y después las observaciones test se transformarán con las medias y desviaciones típicas de los datos de entrenamiento, de este modo evitamos que el conjunto test intervenga en el entrenamiento del modelo
+
+
+### 3.1.1 Normalización del conjunto de entrenamiento
+```{r}
+zent<- scale(train.data[,-1], center=TRUE, scale=TRUE)
+medias<- attr(zent, "scaled:center")
+dt<- attr(zent, "scaled:scale")
+```
+
+### 3.1.2 Aplica mismo escalado sobre el conjunto test
+```{r}
+ztest<- scale(test.data[,-1], medias, dt)
+```
+
+
+## 3.2 Construcción y ajuste del modelo
+
+A continuación construiremos el modelo basado en el Perceptrón multicapa. Usaremos la función *tune* de la libreria *e1071* para encontrar los valores óptimos de *size* (tamaño de la capa oculta) y el parámetro *decay* (regularización L2 para evitar sobreajuste)
+
+La función *tune* obtiene mediante validación cruzada los errores de clasificación de todas las combinaciones de valores de *size* y *decay* que se le pasan como entrada en la variable *ranges*.
+
+```{r}
+letters.tunePM<- tune(nnet, # modelo Percentron multicapa
+                      zent, # datos de entrenamiento tipificados 
+                      as.numeric((train.data[,1]=="G")), # se codifica G como TRUE y N como FALSE
+                      entropy=TRUE,  # recomendable en problemas de clasificación
+                      ranges=list(size=1:20, decay=c(0, 0.05, 0.1)), 
+                      maxit=100,   # número máximo de iteraciones
+                      trace=FALSE) # para que no imprima la traza de todo el proceso
+
+summary(letters.tunePM)
+plot(letters.tunePM)
+```
+
+
+Obtenemos los valores de *size* y *decay* que minimizan el error de clasificación asi como el mejor modelo que está construido con estos parámetros óptimos.
+```{r}
+# Valores óptimos de los parámetros
+letters.tunePM$best.parameters
+
+# Red con la mejor configuración
+(PM=letters.tunePM$best.model)
+```
+
+El mejor modelo se obtiene con una red neuronal con 19 nodos en la capa oculta.
+
+## 3.3 Evaluación del rendimiento
+
+En primer lugar será necesario obtener las predicciones del conjunto test aplicando el modelo obtenido. Para obtener decisiones *G/N*, se deben comparar las probabilidades estimadas con un punto de corte (*u*), ya que la salida binaria está codificada con *0* (clase *N*) y *1* (categoría *G*):
+
+Construiremos una función que traduzca si la clase seleccionada es *G* o *N* en función de la probabilidad estimada *p* y comparandola con un umbral (*u*) (si *p* >= *u*, decisión= *G*)
+
+```{r}
+predclase<- function (p, u)  
+{ 
+  ifelse(p>=u,"G","N")
+}
+PM.predict=predclase(predict(PM, ztest), 0.5)
+```
+
+Construimos la tabla de confusión
+```{r}
+confusion.table.PM<-table(test.data$lettr, PM.predict)
+confusion.table.PM
+```
+
+Calculamos el acierto por grupos y el acierto total
+```{r}
+PM.group.G.accuracy=round((100*diag(prop.table(confusion.table.PM, 2)))[1], 3)
+PM.group.N.accuracy=round((100*diag(prop.table(confusion.table.PM, 2)))[2], 3)
+PM.total.accuracy=round(100*sum(diag(prop.table(confusion.table.PM))), 3)
+
+
+cat(" Acierto grupo G  =\t",
+    PM.group.G.accuracy,"\n",
+    "Acierto grupo N  =\t",
+    PM.group.N.accuracy,"\n",
+    "Acierto total    =\t",
+    PM.total.accuracy,"\n")
+```
+El modelo basado en el Perceptrón multicapa se ajusta muy bien a los datos y presenta una tasa de acierto muy
+alta.
+# 4. Conclusiones
+
+A continuación construiremos la tabla resumen con la tasa de acierto para ambos modelos
+
+```{r}
+table_RF=c(RF.group.G.accuracy, RF.group.N.accuracy, RF.total.accuracy)
+table_PM=c(PM.group.G.accuracy, PM.group.N.accuracy, PM.total.accuracy)
+
+tabla_resumen = data.frame (round(rbind(table_RF, table_PM), 3), 
+                            row.names=c("Random Forest", "Perceptrón multicapa"))
+
+print(knitr::kable(tabla_resumen, format = "pandoc",
+                   col.names = c("Acierto G", "Acierto N", "Acierto total"), 
+                   align='c'))
+```
+
+A la vista de los resultados podemos concluir que ambos modelos se ajustan muy bien a los datos y que presentan un tasa de acierto alta. No existe diferencia en cuanto a tasa de acierto entre ambos modelos pero quizá desde el punto de vista computacional el modelo Random Forest tiene mejor rendimiento, el sistema ha tardado menos en construirlo y ajustarlo.
